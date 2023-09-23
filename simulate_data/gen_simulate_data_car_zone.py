@@ -61,8 +61,7 @@ class CZDataset(Dataset):
 
     __metaclass__ = ABCMeta
 
-    def __init__(self, kws_wav_dir, bg_wav_dir, noise_path, rir_dir, p_noise_dir,
-                 snr_list=None, sample_rate=16000, speech_seconds=10, mic_num=4):
+    def __init__(self, kws_wav_dir, bg_wav_dir, noise_path, rir_dir, p_noise_dir, sample_rate=16000, speech_seconds=10, mic_num=4):
         self.key_words_list = self.gen_kws_list(kws_wav_dir)
         self.bg_list = self.gen_speaker_list(bg_wav_dir)
         self.mic_num = mic_num
@@ -70,7 +69,6 @@ class CZDataset(Dataset):
         self.noise_data_info = self._list_noise_and_snr(p_noise_dir)
         self.rir_list = self._gen_rir_list(rir_dir)
         self.wav_len = 16000 * speech_seconds
-        self.snr_list = snr_list
         self.sample_rate = sample_rate
     
     def gen_kws_list(self, kws_wav_dir):
@@ -188,11 +186,18 @@ class CZDataset(Dataset):
         key_idx_l = []
         for i in range(self.mic_num):
             if i in position:
-                s_tmp, key_idx = self._get_long_wav()
+                if i < 2:
+                    s_tmp, key_idx = self._get_long_wav(is_key=False)
+                else:
+                    s_tmp, key_idx = self._get_long_wav()
             else:
                 s_tmp = np.zeros([self.wav_len], dtype=np.float32)
                 key_idx = 0
-            s_tmp = s_tmp / (np.max(np.abs(s_tmp)) + 1e-6) * random.uniform(0.3, 0.9)
+            if key_idx > 0:
+                amp = random.uniform(0.5, 0.8)
+            else:
+                amp = random.uniform(0.3, 0.5)
+            s_tmp = s_tmp / (np.max(np.abs(s_tmp)) + 1e-6) * amp
             s_l.append(s_tmp)
             key_idx_l.append(key_idx)
         s = np.stack(s_l, axis=1)
@@ -249,8 +254,13 @@ class CZDataset(Dataset):
                 l.append(self._simulate_freq_response(wav[:, i]))
             return np.stack(l, axis=-1)
 
-    def _get_long_wav(self):
-        if random.random() < 0.5:
+    def _get_long_wav(self, is_key=None):
+        if is_key is None:
+            if random.random() < 0.5:
+                is_key = True
+            else:
+                is_key = False
+        if is_key:
             # key word
             while True:
                 idx = random.randint(0, len(self.key_words_list) - 1)
@@ -259,11 +269,12 @@ class CZDataset(Dataset):
                 wav, _ = sf.read(key_path)
                 wav = wav / (np.max(np.abs(wav)) + 1e-6)
                 if wav.shape[0] < self.wav_len:
-                    key_path2 = key_path_list[random.randint(0, len(key_path_list) - 1)]
-                    wav2, _ = sf.read(key_path2)
-                    wav2 = wav2 / (np.max(np.abs(wav2)) + 1e-6)
-                    if wav2.shape[0] + wav.shape[0] <= self.wav_len:
-                        wav = np.concatenate([wav, wav2], axis=0)
+                    if random.random() < 0:
+                        key_path2 = key_path_list[random.randint(0, len(key_path_list) - 1)]
+                        wav2, _ = sf.read(key_path2)
+                        wav2 = wav2 / (np.max(np.abs(wav2)) + 1e-6)
+                        if wav2.shape[0] + wav.shape[0] <= self.wav_len:
+                            wav = np.concatenate([wav, wav2], axis=0)
                     left_pad = random.randint(0, self.wav_len - wav.shape[0])
                     wav = np.pad(wav, [left_pad, self.wav_len - wav.shape[0] - left_pad])
                     idx = idx + 1
@@ -325,16 +336,39 @@ class GPUDataSimulate(nn.Module):
         frq_response = np.load(frq_response, mmap_mode='c')
         self.frq_response = torch.from_numpy(frq_response.T)
         self.net = gen_net(zone_model_path)
+        self.stft = STFT(512, 256)
 
     def __call__(self, batch_info):
         s, n, p_n, s_rir, p_rir, label_idx = batch_info.s, batch_info.road_n, batch_info.p_n, batch_info.s_rir, batch_info.p_rir, batch_info.label_idx
         mix, s = self.simulate_data(s, n, p_n, s_rir, p_rir)
         enhance_data, _, _ = self.net(mix[:, 2:])
+        b, c, _ = enhance_data.size()
+        enhance_data = enhance_data + random.uniform(0.01, 0.2) * self.stft(s[:, 2:].reshape(b * c, -1)).reshape(b, c, -1)
         b, c, t = enhance_data.shape
-        enhance_data = enhance_data.reshape(-1, t)
-        label_idx = label_idx[:, 2:].reshape(-1, 1)
-        s = s[:, 2:].reshape(-1, t)
-        return enhance_data, s, label_idx
+        enhance_l = []
+        s_l = []
+        label_idx_l = []
+        for i in range(enhance_data.size(0)):
+            if label_idx[i].sum().item() > 0:
+                if label_idx[i, 2].item() > 0:
+                    enhance_l.append(enhance_data[i, 0])
+                    s_l.append(s[i, 2])
+                    label_idx_l.append(label_idx[i, 2])
+                if label_idx[i, 3].item() > 0:
+                    enhance_l.append(enhance_data[i, 1])
+                    s_l.append(s[i, 3])
+                    label_idx_l.append(label_idx[i, 3])
+            else:
+                enhance_l.append(enhance_data[i, 0])
+                s_l.append(s[i, 2])
+                label_idx_l.append(label_idx[i, 2])
+                enhance_l.append(enhance_data[i, 1])
+                s_l.append(s[i, 3])
+                label_idx_l.append(label_idx[i, 3])
+        enhance_data = torch.stack(enhance_l, dim=0)
+        s = torch.stack(s_l, dim=0)
+        label_idx = torch.stack(label_idx_l, dim=0)
+        return  enhance_data, s, label_idx
 
 
     def gen_hpf(self):
@@ -351,11 +385,13 @@ class GPUDataSimulate(nn.Module):
         if self.device != self.hpf.device:
             self.hpf = self.hpf.to(self.device)
             self.frq_response = self.frq_response.to(self.device)
+        wav_max = torch.amax(wav.abs(), dim=1, keepdim=True)
         wav = batch_rir_conv_same(wav, torch.tile(self.hpf.unsqueeze(dim=0), [wav.size(0), 1]))
         if firs is None:
             idxs = np.random.choice(self.frq_response.shape[0], wav.size(0), replace=False)
             firs = self.frq_response[idxs]
         wav = batch_rir_conv_same(wav, firs)
+        wav = wav / (torch.amax(wav.abs(), dim=1, keepdim=True) + 1e-5) * wav_max
         if is_need_fir:
             return wav, firs
         else:
@@ -432,7 +468,7 @@ class GPUDataSimulate(nn.Module):
             p_n_alpha = (s_mean / (1e-7 + p_n_mean * (10.0 ** (p_n_snr / 10.0)))).sqrt().unsqueeze(dim=-1).unsqueeze(dim=-1)
 
             mix = s_rev + n * n_alpha + p_rev * p_n_alpha
-            mix_amp = torch.rand(s_rev.size(0), 1, 1, device=s_rev.device) 
+            mix_amp = torch.rand(s_rev.size(0), 1, 1, device=s_rev.device).clamp_(0.1, 1.0)
             alpha = 1 / (torch.amax(torch.abs(mix), [-1, -2], keepdim=True) + EPSILON) * mix_amp
             mix *= alpha
             s_tgt *= alpha
@@ -456,7 +492,7 @@ class SMBatchInfo(object):
 if __name__ == '__main__':
     from settings.config import *
     dataset = CZDataset(TRAINING_KEY_WORDS, TRAINING_BACKGROUND, TRAINING_NOISE, TRAINING_RIR, POINT_NOISE_PATH,
-                        snr_list=[-5, 10], sample_rate=16000, speech_seconds=15)
+                        sample_rate=16000, speech_seconds=15)
     batch_dataloader = BatchDataLoader(dataset, batch_size=4, workers_num=0)
     car_zone_model_path = '/home/yanyongjie/code/official/car/car_zone_2_for_aodi_real/model/student_model/model-1200000--17.81806887626648.pickle'
     data_factory = GPUDataSimulate(TRAIN_FRQ_RESPONSE, ROAD_SNR_LIST, POINT_SNR_LIST, device='cpu', zone_model_path=car_zone_model_path)

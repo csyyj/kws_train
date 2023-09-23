@@ -13,7 +13,7 @@ from settings.config import *
 from train.model_handle import *
 from tools.batch_rir_conv import batch_rir_conv
 from torch.multiprocessing import Process
-from network.mdtc import MDTCSML
+from network.mdtc_8bit import MDTCSML
 from tensorboardX import SummaryWriter
 from simulate_data.gen_simulate_data_car_zone import BatchDataLoader, CZDataset, GPUDataSimulate
 from datetime import datetime
@@ -38,7 +38,7 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
     data_factory = GPUDataSimulate(TRAIN_FRQ_RESPONSE, ROAD_SNR_LIST, POINT_SNR_LIST, device=device, zone_model_path=car_zone_model_path).to(device)
     if is_need_dataloader:        
         dataset = CZDataset(TRAINING_KEY_WORDS, TRAINING_BACKGROUND, TRAINING_NOISE, TRAINING_RIR, POINT_NOISE_PATH,
-                        snr_list=[-5, 10], sample_rate=16000, speech_seconds=8)
+                        sample_rate=16000, speech_seconds=4)
         batch_dataloader = BatchDataLoader(dataset, batch_size=BATCH_SIZE, workers_num=8)
         net_work, batch_dataloader, data_factory = accelerator.prepare(net_work, batch_dataloader, data_factory)
     optim = torch.optim.Adam(filter(lambda p: p.requires_grad, net_work.parameters()), lr=LR)
@@ -63,7 +63,10 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
             enhance_data, s, label_idx = data_factory(batch_info=batch_info)
             enhance_data = enhance_data.to(device)
             s = s.to(device)
-            label_idx = label_idx.to(device)     
+            label_idx = label_idx.to(device)
+            # enhance_data = torch.cat([enhance_data, s], dim=0)
+            # s = torch.cat([s, s], dim=0)
+            # label_idx = torch.cat([label_idx, label_idx], dim=0)     
             logist, train_hidden, loss, acc = \
                 net_work(enhance_data, target=label_idx, clean_speech=s, hidden=train_hidden)
                 # net_work(mix=mix_in, anchor=anchor, tgt=s_in, spk_tgt=spk_tgt_tmp, spk_id=spk_id, is_spk=False, hidden=train_hidden)
@@ -78,7 +81,7 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
                     total_norm += param_norm.item() ** norm_type
             # print(total_norm)
             if not np.isnan(total_norm):
-                torch.nn.utils.clip_grad_norm_(net_work.parameters(), 0.1)
+                torch.nn.utils.clip_grad_norm_(net_work.parameters(), 0.001)
                 optim.step()
             else:
                 print('grad find nan')
@@ -101,6 +104,7 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
             if step % TEST_TIMES == 0 and rank == 0:
                 save_model(net_work.module, optim, step, avg_loss, models_dir=MODEL_DIR)
                 with torch.no_grad():
+                    # mix_np = mix_data.to(torch.float32).detach().cpu().numpy()
                     in_np = enhance_data.to(torch.float32).detach().cpu().numpy()
                     s_np = s.to(torch.float32).detach().cpu().numpy()
                     target_np = label_idx.to(torch.long).detach().cpu().numpy()
@@ -109,6 +113,7 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
                         os.mkdir(TRAINING_CHECK_PATH)
                     for i in range(data_np.shape[0]):
                         sf.write('{}/{}_enhance_{}.wav'.format(TRAINING_CHECK_PATH, i, target_np[i]), data_np[i], 16000)
+                        # sf.write('{}/{}_mix_{}.wav'.format(TRAINING_CHECK_PATH, i, target_np[i]), mix_np[i], 16000)
 
                 
     return net_work

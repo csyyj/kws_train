@@ -37,16 +37,17 @@ if __name__ == '__main__':
         if len(mix.shape) == 1:
             mix = np.reshape(mix, [-1, 1])
         est_kws_l = []
+        count_l = []
         for i in range(mix.shape[1]):
             mix_c = torch.from_numpy(mix[:, i].astype(np.float32))
             with torch.no_grad():
                 mix_c = mix_c.unsqueeze(dim=0).to('cuda:0')
                 t = mix_c.size(-1)
-                if t > 16000 * 20:
+                if t > 16000 * 200:
                     l = []
                     hidden = None
-                    for i in range(t // (16000 * 20) + 1):
-                        tmp_in = mix_c[..., i * 16000 * 20:(i + 1) * 16000 * 20]
+                    for i in range(t // (16000 * 200) + 1):
+                        tmp_in = mix_c[..., i * 16000 * 200:(i + 1) * 16000 * 200]
                         if tmp_in.size(0) < 1:
                             break
                         logist, hidden, _, _ = net_work(tmp_in, hidden=hidden)
@@ -57,10 +58,20 @@ if __name__ == '__main__':
                 est_logist = torch.softmax(est, dim=-1).squeeze()[:, 1]
                 est_kws = torch.zeros_like(est_logist)
                 est_kws[est_logist > THRES_HOLD] = 0.8
+                count = 0
+                k = 0
+                while k < est_kws.size(0):
+                    if est_logist[k] > THRES_HOLD:
+                        count += 1
+                        k += 20
+                    else:
+                        k += 1
+                count_l.append(count)
                 est_kws = torch.tile(est_kws.reshape(-1, 1), [1, 256]).reshape(-1)
             min_len = min(est_kws.shape[0], mix_c.reshape(-1).shape[0])
             est_kws_l.append(mix_c.reshape(-1)[:min_len])
             est_kws_l.append(est_kws[:min_len])
         est = torch.stack(est_kws_l, dim= -1).detach().cpu().numpy()
+        print(count_l)
         sf.write(f_path.replace('.wav', '{}.wav'.format(PROCESS_EXT)), est, f)
         print('{} has process!'.format(f_path))

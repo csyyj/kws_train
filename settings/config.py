@@ -5,7 +5,10 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,7,8,9"
 
 TRAIN_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-TRAINING_BACKGROUND = '/home/yanyongjie/train_data/speech'
+TRAINING_BACKGROUND = '/home/yanyongjie/train_data/speaker'
+TRAINING_BACKGROUND_WAV = ['/home/yanyongjie/train_data/kws_data/导航去公司',
+                           '/home/yanyongjie/train_data/kws_data/导航去公司',
+                           ]
 TRAINING_KEY_WORDS = ['/home/yanyongjie/train_data/kws_data/理想同学',
                      #  '/home/yanyongjie/train_data/kws_data/导航去公司',
                      #  '/home/yanyongjie/train_data/kws_data/导航回家',
@@ -28,12 +31,11 @@ TRAINING_RIR = {
 }
 TRAINING_CHECK_PATH = './check'
 
-ROAD_SNR_LIST = [-5, -2, -1, 0, 1, 2, 3, 5, 10]
-POINT_SNR_LIST = [ 0, 1, 2, 3, 5, 10]
-SNR_LIST = [-5, -2, -1, 0, 1, 2, 3, 5, 10]
+ROAD_SNR_LIST = [-3, -2, -1, 0, 1, 2, 3, 5, 10]
+POINT_SNR_LIST = [2, 3, 5, 10]
 
-BATCH_SIZE = 64
-LR = 0.00001
+BATCH_SIZE = 32
+LR = 1e-7
 
 RESUME_MODEL = True 
 
@@ -42,6 +44,6 @@ MODEL_NAME = ''  # 'model-26400--15.593444061279296'  # 'model-364145-0.03338756
 
 PRINT_TIMES = 100
 
-TEST_TIMES = 1000
+TEST_TIMES = 500
 
 TRAIN_FRQ_RESPONSE = '/home/yanyongjie/train_data/fir/fir_1000000.npy'

@@ -23,7 +23,7 @@ class TimeVad(object):
         pow = (frame_wav ** 2).sum(-1)
         pow_db = 10 * torch.log10(pow + 1e-7)
         sorted, indices = torch.sort(pow_db, dim=-1)
-        mean_pow = sorted[:, -100:].mean(-1, keepdim=True)
+        mean_pow = sorted[:, -25:].mean(-1, keepdim=True)
         frame_vad = torch.where(pow_db <= (mean_pow - 25), torch.zeros_like(pow_db),
                                 torch.ones_like(pow_db)).unsqueeze(dim=-1)
         # in_wav为全0时，mean_pow为-70
