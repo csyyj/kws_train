@@ -18,6 +18,7 @@ from tensorboardX import SummaryWriter
 from simulate_data.gen_simulate_data_car_zone import BatchDataLoader, CZDataset, GPUDataSimulate
 from datetime import datetime
 from accelerate import Accelerator
+from accelerate import DistributedDataParallelKwargs
 
 torch.backends.cudnn.benchmark = True
 
@@ -31,7 +32,7 @@ def set_seed(seed):
 
 def gen_data_and_network(is_need_dataloader=True, model_name=None):
     set_seed(int(datetime.now().timestamp()))
-    accelerator = Accelerator()
+    accelerator = Accelerator(kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)])
     device = accelerator.device
     net_work = MDTCSML(stack_num=4, stack_size=4, in_channels=64, res_channels=128, kernel_size=7, causal=True).to(device)
     car_zone_model_path = '/home/yanyongjie/code/official/car/car_zone_2_for_aodi_real/model/student_model/model-1200000--17.81806887626648.pickle'

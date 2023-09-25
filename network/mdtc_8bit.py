@@ -293,43 +293,51 @@ class MDTCSML(nn.Module):
         label_vad, _ = self.time_vad(clean_speech)
         start_f = torch.argmax(label_vad, dim=1)
         last_f = label_vad.shape[1] - torch.argmax(torch.flip(label_vad, dims=[1]), dim=1) - 1
-        logits = torch.softmax(logits, dim=-1)
+        logits = torch.softmax(logits, dim=-1)[:, 5:]
         num_utts = logits.size(0)
 
         loss = 0.0
-        non_keyword_weight = 4.0
+        non_keyword_weight = 5.0
         keyword_weight = 1.0
         for i in range(num_utts):
             # 唤醒词
             if target[i] == 0:
                 # 非唤醒词
+                # prob = logits[i, :, 0]
+                # # prob = prob.masked_fill(mask[i], 1.0)
+                # prob = torch.clamp(prob, 1e-8, 1.0)
+                # min_prob = prob.log().sum()
+                # loss += (-min_prob) * non_keyword_weight
+                # 查看非唤醒词类别
                 prob = logits[i, :, 0]
-                # prob = prob.masked_fill(mask[i], 1.0)
                 prob = torch.clamp(prob, 1e-8, 1.0)
-                min_prob = prob.log().sum()
-                loss += (-min_prob) * non_keyword_weight
+                min_prob = torch.amin(prob)
+                loss += -torch.log(min_prob) * non_keyword_weight
             else:
                 # 唤醒词
                 prob = logits[i, :, target[i]]
-                prob1 = prob[start_f[i]: last_f[i] + 5]
+                prob1 = prob#[start_f[i]: last_f[i] + 5]
                 prob1 = torch.clamp(prob1, 1e-8, 1.0)
                 max_prob, max_idx = torch.max(prob1, dim=0)
                 loss += -torch.log(max_prob) * keyword_weight
-                # prob_other = 1 - prob1
-                # loss += -prob_other[:(max_idx - 3)].log().sum()
-                # loss += -prob_other[(max_idx + 3):].log().sum()
+                
+                prob_bg = logits[i, :, 0]
+                if max_idx - 2 > 3:
+                    loss += -torch.log(torch.amin(prob_bg[:(max_idx - 2)])) * non_keyword_weight
+                if max_idx + 2 < prob1.shape[0] - 10:
+                    loss += -torch.log(torch.amin(prob_bg[(max_idx + 2):])) * non_keyword_weight
 
-                prob2 = prob[:start_f[i] - 2]
-                prob2 = 1 - prob2
-                prob2 = torch.clamp(prob2, 1e-8, 1.0)
-                prob2 = prob2.log().sum()
-                loss += -prob2
+                # prob2 = prob[:start_f[i] - 2]
+                # prob2 = 1 - prob2
+                # prob2 = torch.clamp(prob2, 1e-8, 1.0)
+                # prob2 = prob2.log().sum()
+                # loss += -prob2
 
-                prob3 = prob[last_f[i] + 5:]
-                prob3 = 1 - prob3
-                prob3 = torch.clamp(prob3, 1e-8, 1.0)
-                prob3 = prob3.log().sum()
-                loss += -prob3
+                # prob3 = prob[last_f[i] + 5:]
+                # prob3 = 1 - prob3
+                # prob3 = torch.clamp(prob3, 1e-8, 1.0)
+                # prob3 = prob3.log().sum()
+                # loss += -prob3
 
         loss = loss / num_utts
 
@@ -369,9 +377,9 @@ if __name__ == '__main__':
     # torch.save({'state_dict': mdtc.state_dict()}, 'mdtc.pickle')
     num_params = sum(p.numel() for p in mdtc.parameters())
     print('the number of model params: {}'.format(num_params))
-    x = torch.zeros(1, 16000)  # batch-size * time * dim
+    x = torch.zeros(1, 160000)  # batch-size * time * dim
     total_ops, total_params = profile(mdtc, inputs=(x,), verbose=False)
-    flops, params = clever_format([total_ops, total_params], "%.3f ")
+    flops, params = clever_format([total_ops/10, total_params], "%.3f ")
     print(flops, params)
 
     target = torch.ones([1, 1], dtype=torch.long)

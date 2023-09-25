@@ -5,10 +5,9 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,7,8,9"
 
 TRAIN_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-TRAINING_BACKGROUND = '/home/yanyongjie/train_data/speaker'
-TRAINING_BACKGROUND_WAV = ['/home/yanyongjie/train_data/kws_data/导航去公司',
-                           '/home/yanyongjie/train_data/kws_data/导航去公司',
-                           ]
+TRAINING_BACKGROUND = ['/home/yanyongjie/train_data/speaker',
+                       '/home/yanyongjie/train_data/kws/bg_lixiangxx',]
+
 TRAINING_KEY_WORDS = ['/home/yanyongjie/train_data/kws_data/理想同学',
                      #  '/home/yanyongjie/train_data/kws_data/导航去公司',
                      #  '/home/yanyongjie/train_data/kws_data/导航回家',
@@ -35,7 +34,7 @@ ROAD_SNR_LIST = [-3, -2, -1, 0, 1, 2, 3, 5, 10]
 POINT_SNR_LIST = [2, 3, 5, 10]
 
 BATCH_SIZE = 32
-LR = 1e-7
+LR = 1e-8
 
 RESUME_MODEL = True 
 

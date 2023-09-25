@@ -63,13 +63,22 @@ class CZDataset(Dataset):
 
     def __init__(self, kws_wav_dir, bg_wav_dir, noise_path, rir_dir, p_noise_dir, sample_rate=16000, speech_seconds=10, mic_num=4):
         self.key_words_list = self.gen_kws_list(kws_wav_dir)
-        self.bg_list = self.gen_speaker_list(bg_wav_dir)
+        self.bg_wav_list, self.bg_npy_list = self.gen_bg_list(bg_wav_dir)
         self.mic_num = mic_num
         self.road_noise_path_list = gen_target_file_list(noise_path, target_ext='.npy')
         self.noise_data_info = self._list_noise_and_snr(p_noise_dir)
         self.rir_list = self._gen_rir_list(rir_dir)
         self.wav_len = 16000 * speech_seconds
         self.sample_rate = sample_rate
+    
+    def gen_bg_list(self, bg_wav_dir):
+        wav_l = []
+        npy_l = []
+        for p in bg_wav_dir:
+            npy_l += self.gen_speaker_list(p)
+            wav_l += gen_target_file_list(p)
+        return wav_l, npy_l
+            
     
     def gen_kws_list(self, kws_wav_dir):
         keys = []
@@ -123,7 +132,7 @@ class CZDataset(Dataset):
         return filter_list
 
     def __len__(self):
-        return len(self.bg_list) * 10000
+        return len(self.bg_npy_list) * 10000
 
     def _set_zero(self, wav1):
         rdm_times = random.randint(1, 3)
@@ -283,14 +292,26 @@ class CZDataset(Dataset):
                     continue
         else:
             # background
-            while True:
-                spk_id = random.randint(0, len(self.bg_list) - 1)
-                spk_path = self.bg_list[spk_id]
-                spk_wav = np.load(spk_path, mmap_mode='c')
-                if spk_wav.size - 1 - self.wav_len > 0:
-                    break
-            rdm_start = random.randint(0, spk_wav.size - 1 - self.wav_len)
-            wav = spk_wav[rdm_start:rdm_start + self.wav_len]
+            if random.random() < 0.95:
+                while True:
+                    spk_id = random.randint(0, len(self.bg_npy_list) - 1)
+                    spk_path = self.bg_npy_list[spk_id]
+                    spk_wav = np.load(spk_path, mmap_mode='c')
+                    if spk_wav.size - 1 - self.wav_len > 0:
+                        break
+                rdm_start = random.randint(0, spk_wav.size - 1 - self.wav_len)
+                wav = spk_wav[rdm_start:rdm_start + self.wav_len]
+            else:
+                idx = random.randint(0, len(self.bg_wav_list) - 1)
+                bg_path = self.bg_wav_list[idx]
+                wav, _ = sf.read(bg_path)
+                wav = wav / (np.max(np.abs(wav)) + 1e-6)
+                if wav.shape[0] < self.wav_len:
+                    left_pad = random.randint(0, self.wav_len - wav.shape[0])
+                    wav = np.pad(wav, [left_pad, self.wav_len - wav.shape[0] - left_pad])
+                else:
+                    rdm_start = random.randint(0, wav.size - 1 - self.wav_len)
+                    wav = wav[rdm_start:rdm_start + self.wav_len]
             idx = 0
         return wav.astype(np.float32), idx
 
