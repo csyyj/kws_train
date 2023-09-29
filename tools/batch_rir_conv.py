@@ -28,7 +28,7 @@ def complex_matmul(a, b, groups: int = 1):
 
     return c.view(c.size(0), -1, *c.shape[3:])
 
-def batch_rir_conv_same(data_ori, rir, n=5):
+def batch_rir_conv_same(data_ori, rir, n=1):
     '''
     data: [B, T]
     rir: [B, f_lens] or [B, C, f_lens]

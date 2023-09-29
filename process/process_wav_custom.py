@@ -7,6 +7,7 @@ from tools.stft_istft import *
 MIX_WAV_FILE_PATH = './process/test_wav'
 PROCESS_EXT = 'elevoc_process'
 THRES_HOLD = 0.5
+REGISTER_INDEX = [172, 346, 327, 355, 0, 0]
 
 def gen_target_file_list(target_dir, target_ext='.wav'):
     l = []
@@ -26,6 +27,7 @@ if __name__ == '__main__':
         model_name = sys.argv[1]
     else:
         model_name = None
+    custom_in = torch.from_numpy(np.array(REGISTER_INDEX).astype(np.int64)).to('cuda:0')
     net_work = gen_data_and_network(is_need_dataloader=False, model_name=model_name)
     net_work = net_work.to('cuda:0')
     net_work.eval()
@@ -50,11 +52,11 @@ if __name__ == '__main__':
                         tmp_in = mix_c[..., i * 16000 * 200:(i + 1) * 16000 * 200]
                         if tmp_in.size(0) < 1:
                             break
-                        logist, hidden, _, _, _ = net_work(tmp_in, hidden=hidden)
+                        _, hidden, _, _, logist = net_work(tmp_in, hidden=hidden, custom_in=custom_in)
                         l.append(logist)
                     est = torch.cat(l, dim=1)
                 else:
-                    est, _, _, _, _ = net_work(mix_c)
+                    _, _, _, _, est = net_work(mix_c, custom_in=custom_in)
                 est_logist = (torch.softmax(est, dim=-1).squeeze()[:, 1:]).amax(1)
                 est_kws = torch.zeros_like(est_logist)
                 est_kws[est_logist > THRES_HOLD] = 0.8

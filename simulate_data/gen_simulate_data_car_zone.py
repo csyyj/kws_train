@@ -2,7 +2,9 @@ import logging
 import os
 import random
 import torch
+import pickle
 import numpy as np
+import librosa
 import scipy.io as sio
 import scipy.signal as signal
 import soundfile as sf
@@ -22,10 +24,13 @@ NOISE_PARTS_NUM = 20
 #
 SPEECH_KEY = 's'
 KEY_WORDS_LEBEL = 'label_idx'
+CUSTOM_LABEL = 'custom_label'
+CUSTOM_LABEL_LEN = 'custom_label_len'
 ROAD_NOISE_KEY = 'road_noise'  # 原始的mic信号，纬度[mic_num, t, mic_num], S_ORI[i]表示第i个位置说话人到每个mic的信号
 P_NOISE_KEY = 'p_noise'
 S_RIR_KEY = 's_rir_key'
 P_NOISE_RIR_KEY = 'p_noise_rir_key'
+NFRAMES_KEY = 'nframes'
 
 # dataset config
 # tuning
@@ -61,9 +66,10 @@ class CZDataset(Dataset):
 
     __metaclass__ = ABCMeta
 
-    def __init__(self, kws_wav_dir, bg_wav_dir, noise_path, rir_dir, p_noise_dir, sample_rate=16000, speech_seconds=10, mic_num=4):
-        self.key_words_list = self.gen_kws_list(kws_wav_dir)
-        self.bg_wav_list, self.bg_npy_list = self.gen_bg_list(bg_wav_dir)
+    def __init__(self, pin_yin_config_path, kws_wav_dir, bg_wav_dir, noise_path, rir_dir, p_noise_dir, sample_rate=16000, speech_seconds=15, mic_num=4):
+        self.pin_yin_config = self.parse_pin_yin_config(pin_yin_config_path)
+        self.key_words_list = self.gen_kw_pickle_list(kws_wav_dir)
+        self.bg_wav_list = self.gen_pickle_list(bg_wav_dir)
         self.mic_num = mic_num
         self.road_noise_path_list = gen_target_file_list(noise_path, target_ext='.npy')
         self.noise_data_info = self._list_noise_and_snr(p_noise_dir)
@@ -71,20 +77,38 @@ class CZDataset(Dataset):
         self.wav_len = 16000 * speech_seconds
         self.sample_rate = sample_rate
     
-    def gen_bg_list(self, bg_wav_dir):
-        wav_l = []
-        npy_l = []
-        for p in bg_wav_dir:
-            npy_l += self.gen_speaker_list(p)
-            wav_l += gen_target_file_list(p)
-        return wav_l, npy_l
+    def parse_pin_yin_config(self, pin_yin_config_path):
+        with open(pin_yin_config_path, 'r') as f:
+            data = f.readline()
+            dict = {}
+            while data:
+                key, value = data.split('\t')
+                dict[key] = value.replace('\n', '')
+                data = f.readline()
+        return dict
             
     
-    def gen_kws_list(self, kws_wav_dir):
+    def gen_pickle_list(self, pickle_pathes):
         keys = []
-        for path in kws_wav_dir:
-            tmp_l = gen_target_file_list(path)
-            keys.append(tmp_l)
+        for path in pickle_pathes:
+            with open(path, 'rb') as f:
+                tmp = pickle.load(f)
+            keys += tmp
+        return keys
+    
+    def gen_kw_pickle_list(self, pickle_pathes):
+        keys = []
+        for info in pickle_pathes:
+            if isinstance(info, list):
+                tmp = []
+                for p in info:
+                    with open(p, 'rb') as f:
+                        key_tmp = pickle.load(f)
+                    tmp += key_tmp
+            else:
+                with open(info, 'rb') as f:
+                    tmp = pickle.load(f)
+            keys.append(tmp)
         return keys
         
 
@@ -132,7 +156,7 @@ class CZDataset(Dataset):
         return filter_list
 
     def __len__(self):
-        return len(self.bg_npy_list) * 10000
+        return len(self.bg_wav_list) * 10000
 
     def _set_zero(self, wav1):
         rdm_times = random.randint(1, 3)
@@ -157,7 +181,7 @@ class CZDataset(Dataset):
         return s_rir
 
     def _choice_rir(self, num_person):
-        position = random.sample(list(range(self.mic_num)), num_person)
+        position = random.sample([2, 3], num_person)
         rir_l = []
         for i in range(self.mic_num):
             rir_pad = np.zeros([3000, self.mic_num], dtype=np.float32)
@@ -189,19 +213,28 @@ class CZDataset(Dataset):
         return n
 
     def __getitem__(self, idx):
-        num_person = random.randint(1, self.mic_num)
+        num_person = random.randint(1, 2)
         position, rirs = self._choice_rir(num_person)
         s_l = []
         key_idx_l = []
+        max_label_len = 0
+        label_l = []
+        label_len_l = []
+        real_frames_l = []
         for i in range(self.mic_num):
             if i in position:
                 if i < 2:
-                    s_tmp, key_idx = self._get_long_wav(is_key=False)
+                    s_tmp, key_idx, label, real_frames = self._get_long_wav(is_key=False)
                 else:
-                    s_tmp, key_idx = self._get_long_wav()
+                    s_tmp, key_idx, label, real_frames = self._get_long_wav()
             else:
                 s_tmp = np.zeros([self.wav_len], dtype=np.float32)
                 key_idx = 0
+                label = np.array([0], dtype=np.int64)
+                real_frames = self.wav_len // 256
+            label_len_l.append(label.size)
+            if max_label_len < label.shape[0]:
+                max_label_len = label.shape[0]
             if key_idx > 0:
                 amp = random.uniform(0.5, 0.8)
             else:
@@ -209,15 +242,28 @@ class CZDataset(Dataset):
             s_tmp = s_tmp / (np.max(np.abs(s_tmp)) + 1e-6) * amp
             s_l.append(s_tmp)
             key_idx_l.append(key_idx)
-        s = np.stack(s_l, axis=1)
-        key_idx = np.array(key_idx_l, dtype=np.int64)
+            label_l.append(label)
+            real_frames_l.append(real_frames)
         
-        num_p_noise = random.randint(1, max(2, self.mic_num // 2 + 1))
-        p_position, p_rirs = self._choice_rir(num_p_noise)
+        # s_l_new = []
+        label_l_new = []
+        for i in range(self.mic_num):
+            # s_tmp = s_l[i]
+            # s_l_new.append(np.pad(s_tmp, mode='constant', pad_width=[0, max_len - s_tmp.size], constant_values=[0, 0]))
+            label_tmp = label_l[i]
+            label_l_new.append(np.pad(label_tmp, mode='constant', pad_width=[0, max_label_len - label_tmp.size], constant_values=[-1, -1]))
+        
+        s = np.stack(s_l, axis=1)
+        label = np.stack(label_l_new, axis=1)
+        label_len = np.array(label_len_l, dtype=np.int64)
+        key_idx = np.array(key_idx_l, dtype=np.int64)
+        real_frames = np.array(real_frames_l)
+        
+        p_position, p_rirs = self._choice_rir(2)
         n_l = []
         for i in range(self.mic_num):
             if i in p_position:
-                p_n_tmp = self._read_point_noise()
+                p_n_tmp = self._read_point_noise(self.wav_len)
             else:
                 p_n_tmp = np.zeros([self.wav_len], dtype=np.float32)
             n_l.append(p_n_tmp)
@@ -227,10 +273,13 @@ class CZDataset(Dataset):
         noise_start = random.randint(0, road_noise.shape[1] - 1 - s.shape[0])
         sel_noise = road_noise[:, noise_start:noise_start + s.shape[0]]
         np.random.shuffle(sel_noise)
-        sel_noise = sel_noise[:self.mic_num]
+        sel_noise = sel_noise[:self.mic_num].T
         res_dict = {
             SPEECH_KEY: torch.from_numpy(s.astype(np.float32)),
+            NFRAMES_KEY: torch.from_numpy(real_frames.astype(np.int64)),
             KEY_WORDS_LEBEL: torch.from_numpy(key_idx.astype(np.int64)),
+            CUSTOM_LABEL: torch.from_numpy(label.astype(np.int64)),
+            CUSTOM_LABEL_LEN: torch.from_numpy(label_len.astype(np.int64)),
             P_NOISE_KEY: torch.from_numpy(p_noise.astype(np.float32)),
             ROAD_NOISE_KEY: torch.from_numpy(sel_noise.astype(np.float32)),
             S_RIR_KEY: torch.from_numpy(rirs.astype(np.float32)),
@@ -262,7 +311,29 @@ class CZDataset(Dataset):
             for i in range(wav.shape[-1]):
                 l.append(self._simulate_freq_response(wav[:, i]))
             return np.stack(l, axis=-1)
+    
+    def gen_label_wav(self, info):
+        path = os.path.join('/mnt/raid2/user_space/yanyongjie/asr', info[1])
+        if not os.path.exists(path):
+            print('wav not find: {}'.format(path))
+            return None, None, False
+        data, fs = sf.read(path)
+        if fs != 16000:
+            data = librosa.resample(data, orig_sr=fs, target_sr=16000)
+        label = self.pinyin2idx(info[2], info)
+        return data, label, True
 
+    def pinyin2idx(self, pin_yin, info):
+        slice_in = pin_yin.split(' ')
+        l = []
+        for p in slice_in:
+            try:
+                idx = self.pin_yin_config[p]
+                l.append(idx)
+            except:
+                print(info)
+        return np.array(l, dtype=np.int64)
+    
     def _get_long_wav(self, is_key=None):
         if is_key is None:
             if random.random() < 0.5:
@@ -273,47 +344,35 @@ class CZDataset(Dataset):
             # key word
             while True:
                 idx = random.randint(0, len(self.key_words_list) - 1)
-                key_path_list = self.key_words_list[idx]
-                key_path = key_path_list[random.randint(0, len(key_path_list) - 1)]
-                wav, _ = sf.read(key_path)
+                key_list = self.key_words_list[idx]
+                rdm_idx = random.randint(0, len(key_list) - 1)
+                bg_info = key_list[rdm_idx]
+                wav, label, success = self.gen_label_wav(bg_info)
+                if not success:
+                    continue
                 wav = wav / (np.max(np.abs(wav)) + 1e-6)
                 if wav.shape[0] < self.wav_len:
-                    if random.random() < 0:
-                        key_path2 = key_path_list[random.randint(0, len(key_path_list) - 1)]
-                        wav2, _ = sf.read(key_path2)
-                        wav2 = wav2 / (np.max(np.abs(wav2)) + 1e-6)
-                        if wav2.shape[0] + wav.shape[0] <= self.wav_len:
-                            wav = np.concatenate([wav, wav2], axis=0)
-                    left_pad = random.randint(0, self.wav_len - wav.shape[0])
-                    wav = np.pad(wav, [left_pad, self.wav_len - wav.shape[0] - left_pad])
-                    idx = idx + 1
                     break
                 else:
                     continue
+            idx = idx + 1
         else:
             # background
-            if random.random() < 0.95:
-                while True:
-                    spk_id = random.randint(0, len(self.bg_npy_list) - 1)
-                    spk_path = self.bg_npy_list[spk_id]
-                    spk_wav = np.load(spk_path, mmap_mode='c')
-                    if spk_wav.size - 1 - self.wav_len > 0:
-                        break
-                rdm_start = random.randint(0, spk_wav.size - 1 - self.wav_len)
-                wav = spk_wav[rdm_start:rdm_start + self.wav_len]
-            else:
+            while True:
                 idx = random.randint(0, len(self.bg_wav_list) - 1)
-                bg_path = self.bg_wav_list[idx]
-                wav, _ = sf.read(bg_path)
+                bg_info = self.bg_wav_list[idx]
+                wav, label, success = self.gen_label_wav(bg_info)
+                if not success:
+                    continue
                 wav = wav / (np.max(np.abs(wav)) + 1e-6)
                 if wav.shape[0] < self.wav_len:
-                    left_pad = random.randint(0, self.wav_len - wav.shape[0])
-                    wav = np.pad(wav, [left_pad, self.wav_len - wav.shape[0] - left_pad])
+                    break
                 else:
-                    rdm_start = random.randint(0, wav.size - 1 - self.wav_len)
-                    wav = wav[rdm_start:rdm_start + self.wav_len]
+                    continue
             idx = 0
-        return wav.astype(np.float32), idx
+        real_frames = wav.shape[0] // 256
+        wav = np.concatenate([wav, np.zeros([self.wav_len - wav.shape[0]], dtype=np.float64)], axis=-1)
+        return wav.astype(np.float32), idx, label, real_frames
 
 
 class BatchDataLoader(DataLoader):
@@ -330,6 +389,7 @@ class BatchDataLoader(DataLoader):
 
     @staticmethod
     def collate_fn(batch):
+        # batch.sort(key=lambda x: x[NFRAMES_KEY].max(), reverse=True)
         keys = batch[0].keys()
         parse_res = []
         for item in batch:
@@ -360,36 +420,83 @@ class GPUDataSimulate(nn.Module):
         self.stft = STFT(512, 256)
 
     def __call__(self, batch_info):
-        s, n, p_n, s_rir, p_rir, label_idx = batch_info.s, batch_info.road_n, batch_info.p_n, batch_info.s_rir, batch_info.p_rir, batch_info.label_idx
-        mix, s = self.simulate_data(s, n, p_n, s_rir, p_rir)
-        enhance_data, _, _ = self.net(mix[:, 2:])
-        b, c, _ = enhance_data.size()
-        enhance_data = enhance_data + random.uniform(0.01, 0.2) * self.stft(s[:, 2:].reshape(b * c, -1)).reshape(b, c, -1)
-        b, c, t = enhance_data.shape
-        enhance_l = []
-        s_l = []
-        label_idx_l = []
-        for i in range(enhance_data.size(0)):
-            if label_idx[i].sum().item() > 0:
-                if label_idx[i, 2].item() > 0:
-                    enhance_l.append(enhance_data[i, 0])
+        with torch.no_grad():
+            s, n, p_n, s_rir, p_rir, label_idx, custom_label, custom_label_len, real_frames = \
+                batch_info.s, batch_info.road_n, batch_info.p_n, batch_info.s_rir, batch_info.p_rir, batch_info.label_idx, batch_info.custom_label, batch_info.custom_label_len, batch_info.real_frames
+            mix, s, mix_no_inter = self.simulate_data(s, n, p_n, s_rir, p_rir)
+            enhance_data, _, _ = self.net(mix[:, 2:])
+            b, c, _ = enhance_data.size()
+            enhance_data = enhance_data + random.uniform(0.1, 0.3) * self.stft(s[:, 2:].reshape(b * c, -1)).reshape(b, c, -1)
+            # 先用 clean 训练看
+            # enhance_data = self.stft(s[:, 2:].reshape(b * c, -1)).reshape(b, c, -1)
+            b, c, t = enhance_data.shape
+            enhance_l = []
+            s_l = []
+            label_idx_l = []
+            custom_label_l = []
+            real_frames_l = []
+            custom_label_len_l = []
+            for i in range(enhance_data.size(0)):
+                if label_idx[i].sum().item() > 0:
+                    if label_idx[i, 2].item() > 0:
+                        rdm_rate = random.random()
+                        if rdm_rate < 0.5:
+                            enhance_l.append(enhance_data[i, 0])
+                        elif rdm_rate < 0.7:
+                            enhance_l.append(mix_no_inter[i, 2])
+                        else:
+                            enhance_l.append(s[i, 2])
+                        s_l.append(s[i, 2])
+                        label_idx_l.append(label_idx[i, 2])
+                        custom_label_l.append(custom_label[i, :, 2])
+                        real_frames_l.append(real_frames[i, 2])
+                        custom_label_len_l.append(custom_label_len[i, 2])
+                    if label_idx[i, 3].item() > 0:
+                        rdm_rate = random.random()
+                        if rdm_rate < 0.5:
+                            enhance_l.append(enhance_data[i, 1])
+                        elif rdm_rate < 0.7:
+                            enhance_l.append(mix_no_inter[i, 3])
+                        else:
+                            enhance_l.append(s[i, 3])
+                        s_l.append(s[i, 3])
+                        label_idx_l.append(label_idx[i, 3])
+                        custom_label_l.append(custom_label[i, :, 3])
+                        real_frames_l.append(real_frames[i, 3])
+                        custom_label_len_l.append(custom_label_len[i, 3])
+                else:
+                    rdm_rate = random.random()
+                    if rdm_rate < 0.5:
+                        enhance_l.append(enhance_data[i, 0])
+                    elif rdm_rate < 0.7:
+                        enhance_l.append(mix_no_inter[i, 2])
+                    else:
+                        enhance_l.append(s[i, 2])
                     s_l.append(s[i, 2])
                     label_idx_l.append(label_idx[i, 2])
-                if label_idx[i, 3].item() > 0:
-                    enhance_l.append(enhance_data[i, 1])
+                    custom_label_l.append(custom_label[i, :, 2])
+                    real_frames_l.append(real_frames[i, 2])
+                    custom_label_len_l.append(custom_label_len[i, 2])
+                    
+                    rdm_rate = random.random()
+                    if rdm_rate < 0.5:
+                        enhance_l.append(enhance_data[i, 1])
+                    elif rdm_rate < 0.7:
+                        enhance_l.append(mix_no_inter[i, 3])
+                    else:
+                        enhance_l.append(s[i, 3])
                     s_l.append(s[i, 3])
                     label_idx_l.append(label_idx[i, 3])
-            else:
-                enhance_l.append(enhance_data[i, 0])
-                s_l.append(s[i, 2])
-                label_idx_l.append(label_idx[i, 2])
-                enhance_l.append(enhance_data[i, 1])
-                s_l.append(s[i, 3])
-                label_idx_l.append(label_idx[i, 3])
-        enhance_data = torch.stack(enhance_l, dim=0)
-        s = torch.stack(s_l, dim=0)
-        label_idx = torch.stack(label_idx_l, dim=0)
-        return  enhance_data, s, label_idx
+                    custom_label_l.append(custom_label[i, :, 3])
+                    real_frames_l.append(real_frames[i, 3])
+                    custom_label_len_l.append(custom_label_len[i, 2])
+            enhance_data = torch.stack(enhance_l, dim=0)
+            s = torch.stack(s_l, dim=0)
+            label_idx = torch.stack(label_idx_l, dim=0)
+            custom_label = torch.stack(custom_label_l, dim=0)
+            real_frames = torch.stack(real_frames_l, dim=0)
+            custom_label_len = torch.stack(custom_label_len_l, dim=0)
+        return  enhance_data, s, label_idx, custom_label, custom_label_len, real_frames
 
 
     def gen_hpf(self):
@@ -458,7 +565,7 @@ class GPUDataSimulate(nn.Module):
             s_tgt_l = []
             for i in range(s.size(-1)):
                 s[..., i] = self.simulate_freq_response(s[..., i])
-                n[:, i] = self.simulate_freq_response(n[:, i])
+                n[..., i] = self.simulate_freq_response(n[..., i])
                 p_n[..., i] = self.simulate_freq_response(p_n[..., i])
                 s_rev_tmp =  batch_rir_conv(s[..., i], s_rir[..., i])[..., :s.size(1)]
                 p_n_rev_tmp =  batch_rir_conv(p_n[..., i], p_rir[..., i])[..., :s.size(1)]
@@ -488,13 +595,15 @@ class GPUDataSimulate(nn.Module):
                                         device=s.device)
             p_n_alpha = (s_mean / (1e-7 + p_n_mean * (10.0 ** (p_n_snr / 10.0)))).sqrt().unsqueeze(dim=-1).unsqueeze(dim=-1)
 
-            mix = s_rev + n * n_alpha + p_rev * p_n_alpha
+            mix = s_rev + n.permute(0, 2, 1) * n_alpha + p_rev * p_n_alpha
+            mix_no_inter = s_tgt + n.permute(0, 2, 1) * n_alpha + p_rev * p_n_alpha
             mix_amp = torch.rand(s_rev.size(0), 1, 1, device=s_rev.device).clamp_(0.1, 1.0)
             alpha = 1 / (torch.amax(torch.abs(mix), [-1, -2], keepdim=True) + EPSILON) * mix_amp
+            mix_no_inter *= alpha
             mix *= alpha
             s_tgt *= alpha
             s_rev *= alpha
-            return mix, s_tgt
+            return mix, s_tgt, mix_no_inter
 
 
 
@@ -503,7 +612,10 @@ class SMBatchInfo(object):
     def __init__(self, batch_dict):
         super(SMBatchInfo, self).__init__()
         self.s = batch_dict[SPEECH_KEY] if SPEECH_KEY in batch_dict else None
+        self.real_frames = batch_dict[NFRAMES_KEY] if NFRAMES_KEY in batch_dict else None
         self.label_idx = batch_dict[KEY_WORDS_LEBEL] if KEY_WORDS_LEBEL in batch_dict else None
+        self.custom_label = batch_dict[CUSTOM_LABEL] if CUSTOM_LABEL in batch_dict else None
+        self.custom_label_len = batch_dict[CUSTOM_LABEL_LEN] if CUSTOM_LABEL_LEN in batch_dict else None
         self.road_n = batch_dict[ROAD_NOISE_KEY] if ROAD_NOISE_KEY in batch_dict else None
         self.p_n = batch_dict[P_NOISE_KEY] if P_NOISE_KEY in batch_dict else None
         self.s_rir = batch_dict[S_RIR_KEY] if S_RIR_KEY in batch_dict else None
