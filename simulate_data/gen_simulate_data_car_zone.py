@@ -227,12 +227,13 @@ class CZDataset(Dataset):
                     s_tmp, key_idx, label, real_frames = self._get_long_wav(is_key=False)
                 else:
                     s_tmp, key_idx, label, real_frames = self._get_long_wav()
+                label_len_l.append(label.size)
             else:
                 s_tmp = np.zeros([self.wav_len], dtype=np.float32)
                 key_idx = 0
-                label = np.array([0], dtype=np.int64)
+                label = np.array([-1], dtype=np.int64)
                 real_frames = self.wav_len // 256
-            label_len_l.append(label.size)
+                label_len_l.append(0)
             if max_label_len < label.shape[0]:
                 max_label_len = label.shape[0]
             if key_idx > 0:
