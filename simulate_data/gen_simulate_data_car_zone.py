@@ -66,7 +66,7 @@ class CZDataset(Dataset):
 
     __metaclass__ = ABCMeta
 
-    def __init__(self, pin_yin_config_path, kws_wav_dir, bg_wav_dir, noise_path, rir_dir, p_noise_dir, sample_rate=16000, speech_seconds=15, mic_num=4):
+    def __init__(self, pin_yin_config_path, kws_wav_dir, bg_wav_dir, noise_path, rir_dir, p_noise_dir, sample_rate=16000, speech_seconds=15, mic_num=2):
         self.pin_yin_config = self.parse_pin_yin_config(pin_yin_config_path)
         self.key_words_list = self.gen_kw_pickle_list(kws_wav_dir)
         self.bg_wav_list = self.gen_pickle_list(bg_wav_dir)
@@ -181,7 +181,7 @@ class CZDataset(Dataset):
         return s_rir
 
     def _choice_rir(self, num_person):
-        position = random.sample([2, 3], num_person)
+        position = random.sample(list(range(self.mic_num)), num_person)
         rir_l = []
         for i in range(self.mic_num):
             rir_pad = np.zeros([3000, self.mic_num], dtype=np.float32)
@@ -213,7 +213,7 @@ class CZDataset(Dataset):
         return n
 
     def __getitem__(self, idx):
-        num_person = random.randint(1, 2)
+        num_person = random.randint(1, self.mic_num)
         position, rirs = self._choice_rir(num_person)
         s_l = []
         key_idx_l = []
@@ -223,10 +223,7 @@ class CZDataset(Dataset):
         real_frames_l = []
         for i in range(self.mic_num):
             if i in position:
-                if i < 2:
-                    s_tmp, key_idx, label, real_frames = self._get_long_wav(is_key=False)
-                else:
-                    s_tmp, key_idx, label, real_frames = self._get_long_wav()
+                s_tmp, key_idx, label, real_frames = self._get_long_wav()
                 label_len_l.append(label.size)
             else:
                 s_tmp = np.zeros([self.wav_len], dtype=np.float32)
@@ -260,7 +257,8 @@ class CZDataset(Dataset):
         key_idx = np.array(key_idx_l, dtype=np.int64)
         real_frames = np.array(real_frames_l)
         
-        p_position, p_rirs = self._choice_rir(2)
+        num_p_noise = random.randint(1, max(2, self.mic_num // 2 + 1))
+        p_position, p_rirs = self._choice_rir(num_p_noise)
         n_l = []
         for i in range(self.mic_num):
             if i in p_position:
@@ -318,9 +316,20 @@ class CZDataset(Dataset):
         if not os.path.exists(path):
             print('wav not find: {}'.format(path))
             return None, None, False
-        data, fs = sf.read(path)
-        if fs != 16000:
-            data = librosa.resample(data, orig_sr=fs, target_sr=16000)
+        npy_path = path.replace('.wav', '.npy')
+        if os.path.exists(npy_path):
+            try:
+                data = np.load(npy_path, mmap_mode='c')
+            except:
+                data, fs = sf.read(path)
+                if fs != 16000:
+                    data = librosa.resample(data, orig_sr=fs, target_sr=16000)
+                np.save(npy_path, data.astype(np.float16))
+        else:
+            data, fs = sf.read(path)
+            if fs != 16000:
+                data = librosa.resample(data, orig_sr=fs, target_sr=16000)
+            np.save(npy_path, data.astype(np.float16))
         label = self.pinyin2idx(info[2], info)
         return data, label, True
 
@@ -337,7 +346,7 @@ class CZDataset(Dataset):
     
     def _get_long_wav(self, is_key=None):
         if is_key is None:
-            if random.random() < 0.5:
+            if random.random() < 0.3:
                 is_key = True
             else:
                 is_key = False
@@ -425,9 +434,9 @@ class GPUDataSimulate(nn.Module):
             s, n, p_n, s_rir, p_rir, label_idx, custom_label, custom_label_len, real_frames = \
                 batch_info.s, batch_info.road_n, batch_info.p_n, batch_info.s_rir, batch_info.p_rir, batch_info.label_idx, batch_info.custom_label, batch_info.custom_label_len, batch_info.real_frames
             mix, s, mix_no_inter = self.simulate_data(s, n, p_n, s_rir, p_rir)
-            enhance_data, _, _ = self.net(mix[:, 2:])
+            enhance_data, _, _ = self.net(mix)
             b, c, _ = enhance_data.size()
-            enhance_data = enhance_data + random.uniform(0.1, 0.3) * self.stft(s[:, 2:].reshape(b * c, -1)).reshape(b, c, -1)
+            enhance_data = enhance_data + random.uniform(0.1, 0.3) * self.stft(s.reshape(b * c, -1)).reshape(b, c, -1)
             # 先用 clean 训练看
             # enhance_data = self.stft(s[:, 2:].reshape(b * c, -1)).reshape(b, c, -1)
             b, c, t = enhance_data.shape
@@ -439,58 +448,58 @@ class GPUDataSimulate(nn.Module):
             custom_label_len_l = []
             for i in range(enhance_data.size(0)):
                 if label_idx[i].sum().item() > 0:
-                    if label_idx[i, 2].item() > 0:
+                    if label_idx[i, 0].item() > 0:
                         rdm_rate = random.random()
                         if rdm_rate < 0.5:
                             enhance_l.append(enhance_data[i, 0])
                         elif rdm_rate < 0.7:
-                            enhance_l.append(mix_no_inter[i, 2])
+                            enhance_l.append(mix_no_inter[i, 0])
                         else:
-                            enhance_l.append(s[i, 2])
-                        s_l.append(s[i, 2])
-                        label_idx_l.append(label_idx[i, 2])
-                        custom_label_l.append(custom_label[i, :, 2])
-                        real_frames_l.append(real_frames[i, 2])
-                        custom_label_len_l.append(custom_label_len[i, 2])
-                    if label_idx[i, 3].item() > 0:
+                            enhance_l.append(s[i, 0])
+                        s_l.append(s[i, 0])
+                        label_idx_l.append(label_idx[i, 0])
+                        custom_label_l.append(custom_label[i, :, 0])
+                        real_frames_l.append(real_frames[i, 0])
+                        custom_label_len_l.append(custom_label_len[i, 0])
+                    if label_idx[i, 1].item() > 0:
                         rdm_rate = random.random()
                         if rdm_rate < 0.5:
                             enhance_l.append(enhance_data[i, 1])
                         elif rdm_rate < 0.7:
-                            enhance_l.append(mix_no_inter[i, 3])
+                            enhance_l.append(mix_no_inter[i, 1])
                         else:
-                            enhance_l.append(s[i, 3])
-                        s_l.append(s[i, 3])
-                        label_idx_l.append(label_idx[i, 3])
-                        custom_label_l.append(custom_label[i, :, 3])
-                        real_frames_l.append(real_frames[i, 3])
-                        custom_label_len_l.append(custom_label_len[i, 3])
+                            enhance_l.append(s[i, 1])
+                        s_l.append(s[i, 1])
+                        label_idx_l.append(label_idx[i, 1])
+                        custom_label_l.append(custom_label[i, :, 1])
+                        real_frames_l.append(real_frames[i, 1])
+                        custom_label_len_l.append(custom_label_len[i, 1])
                 else:
                     rdm_rate = random.random()
                     if rdm_rate < 0.5:
                         enhance_l.append(enhance_data[i, 0])
                     elif rdm_rate < 0.7:
-                        enhance_l.append(mix_no_inter[i, 2])
+                        enhance_l.append(mix_no_inter[i, 0])
                     else:
-                        enhance_l.append(s[i, 2])
-                    s_l.append(s[i, 2])
-                    label_idx_l.append(label_idx[i, 2])
-                    custom_label_l.append(custom_label[i, :, 2])
-                    real_frames_l.append(real_frames[i, 2])
-                    custom_label_len_l.append(custom_label_len[i, 2])
+                        enhance_l.append(s[i, 0])
+                    s_l.append(s[i, 0])
+                    label_idx_l.append(label_idx[i, 0])
+                    custom_label_l.append(custom_label[i, :, 0])
+                    real_frames_l.append(real_frames[i, 0])
+                    custom_label_len_l.append(custom_label_len[i, 0])
                     
                     rdm_rate = random.random()
                     if rdm_rate < 0.5:
                         enhance_l.append(enhance_data[i, 1])
                     elif rdm_rate < 0.7:
-                        enhance_l.append(mix_no_inter[i, 3])
+                        enhance_l.append(mix_no_inter[i, 1])
                     else:
-                        enhance_l.append(s[i, 3])
-                    s_l.append(s[i, 3])
-                    label_idx_l.append(label_idx[i, 3])
-                    custom_label_l.append(custom_label[i, :, 3])
-                    real_frames_l.append(real_frames[i, 3])
-                    custom_label_len_l.append(custom_label_len[i, 2])
+                        enhance_l.append(s[i, 1])
+                    s_l.append(s[i, 1])
+                    label_idx_l.append(label_idx[i, 1])
+                    custom_label_l.append(custom_label[i, :, 1])
+                    real_frames_l.append(real_frames[i, 1])
+                    custom_label_len_l.append(custom_label_len[i, 1])
             enhance_data = torch.stack(enhance_l, dim=0)
             s = torch.stack(s_l, dim=0)
             label_idx = torch.stack(label_idx_l, dim=0)

@@ -1,7 +1,7 @@
 import os
 import torch
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "5,7,8,9"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
 
 TRAIN_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -124,25 +124,21 @@ TRAINING_NOISE = '/home/yanyongjie/train_data/car_zone/noise/'
 NOISE_PARTS_NUM = 20
 POINT_NOISE_PATH = '/home/yanyongjie/train_data/noise'
 TRAINING_RIR = {
-       'L1': ['/home/yanyongjie/train_data/car_zone/rir/byd_han/L1'],
-       'R1': ['/home/yanyongjie/train_data/car_zone/rir/byd_han/R1'],
-       'L2': ['/home/yanyongjie/train_data/car_zone/rir/byd_han/L2',
-              '/home/yanyongjie/train_data/car_zone/rir/byd_han/C2_L'],
-       'R2': ['/home/yanyongjie/train_data/car_zone/rir/byd_han/R2',
-              '/home/yanyongjie/train_data/car_zone/rir/byd_han/C2_R'],
+       'L2': ['/home/yanyongjie/train_data/car_zone/rir/aodi/L2'],
+       'R2': ['/home/yanyongjie/train_data/car_zone/rir/aodi/R2'],
 }
 TRAINING_CHECK_PATH = './check'
 
 ROAD_SNR_LIST = [-3, -2, -1, 0, 1, 2, 3, 5, 10]
 POINT_SNR_LIST = [2, 3, 5, 10]
 
-BATCH_SIZE = 48
-LR = 1e-4
+BATCH_SIZE = 32 
+LR = 1e-5
 
 RESUME_MODEL = True 
 
 MODEL_DIR = './model/student_model'
-MODEL_NAME = ''#'model-325500--12.769076719284058'#'model-319500--16.160415515899658'#'model-319500--16.160415515899658'  # 'model-26400--15.593444061279296'  # 'model-364145-0.03338756449520588'  # 'model-307000-0.1684750882536173'
+MODEL_NAME = ''#'model-238500-0.08611498154699802'#'model-247500--34.434267597198485'#'model-325500--12.769076719284058'#'model-319500--16.160415515899658'#'model-319500--16.160415515899658'  # 'model-26400--15.593444061279296'  # 'model-364145-0.03338756449520588'  # 'model-307000-0.1684750882536173'
 
 PRINT_TIMES = 100
 

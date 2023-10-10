@@ -50,27 +50,26 @@ if __name__ == '__main__':
                         tmp_in = mix_c[..., i * 16000 * 200:(i + 1) * 16000 * 200]
                         if tmp_in.size(0) < 1:
                             break
-                        logist, hidden, _, _, _ = net_work(tmp_in, hidden=hidden)
+                        logist, _, hidden, _, _, _ = net_work(tmp_in, hidden=hidden)
                         l.append(logist)
                     est = torch.cat(l, dim=1)
                 else:
-                    est, _, _, _, _ = net_work(mix_c)
-                est_logist = (torch.softmax(est, dim=-1).squeeze()[:, 1:]).amax(1)
-                est_kws = torch.zeros_like(est_logist)
-                est_kws[est_logist > THRES_HOLD] = 0.8
+                    est, _, _, _, _, _ = net_work(mix_c)
+                est_logist, max_idx = (torch.softmax(est, dim=-1).squeeze()[:, 1:]).max(1)
+                est_kws = torch.zeros_like(mix_c)
                 count = 0
                 k = 0
-                while k < est_kws.size(0):
+                while k < est_logist.size(0):
                     if est_logist[k] > THRES_HOLD:
+                        est_kws[:, k * 256] = 1 - 0.1 * (max_idx[k] + 1)
                         count += 1
-                        k += 20
+                        k += 120
                     else:
                         k += 1
                 count_l.append(count)
-                est_kws = torch.tile(est_kws.reshape(-1, 1), [1, 256]).reshape(-1)
-            min_len = min(est_kws.shape[0], mix_c.reshape(-1).shape[0])
+            min_len = min(est_kws.shape[1], mix_c.reshape(-1).shape[0])
             est_kws_l.append(mix_c.reshape(-1)[:min_len])
-            est_kws_l.append(est_kws[:min_len])
+            est_kws_l.append(est_kws.reshape(-1)[:min_len])
         est = torch.stack(est_kws_l, dim= -1).detach().cpu().numpy()
         print(count_l)
         sf.write(f_path.replace('.wav', '{}.wav'.format(PROCESS_EXT)), est, f)

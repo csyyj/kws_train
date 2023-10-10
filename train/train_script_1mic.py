@@ -34,7 +34,7 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
     accelerator = Accelerator(kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)])
     device = accelerator.device
     net_work = MDTCSML(stack_num=4, stack_size=4, in_channels=64, res_channels=128, kernel_size=7, causal=True).to(device)
-    car_zone_model_path = '/home/yanyongjie/code/official/car/car_zone_2_for_aodi_real/model/student_model/model-1200000--17.81806887626648.pickle'
+    car_zone_model_path = '/home/yanyongjie/code/official/car/car_zone_2_for_aodi_2_zone_real/model/student_model/model-222000--17.185455236434937.pickle'
     data_factory = GPUDataSimulate(TRAIN_FRQ_RESPONSE, ROAD_SNR_LIST, POINT_SNR_LIST, device=device, zone_model_path=car_zone_model_path).to(device)
     if is_need_dataloader:
         try:
@@ -52,7 +52,7 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
     step = 0
     if RESUME_MODEL:
         step, optim_dict = resume_model(net_work, MODEL_DIR, MODEL_NAME if model_name is None else model_name, device=device)
-        # optim.load_state_dict(optim_dict)
+        optim.load_state_dict(optim_dict)
     
     if is_need_dataloader:
         if rank == 0 and is_need_dataloader:
@@ -72,8 +72,9 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
             real_frames = real_frames.to(device)
             # enhance_data = torch.cat([enhance_data, s], dim=0)
             # s = torch.cat([s, s], dim=0)
-            # label_idx = torch.cat([label_idx, label_idx], dim=0)     
-            logist, train_hidden, loss, acc, acc2 = \
+            # label_idx = torch.cat([label_idx, label_idx], dim=0)   
+            # wav, kw_target=None, ckw_target=None, real_frames=None, ckw_len=None, clean_speech=None, hidden=None, custom_in=  
+            logist, _,  train_hidden, loss, acc, acc2 = \
                 net_work(enhance_data, kw_target=label_idx, ckw_target=custom_label, ckw_len=custom_label_len, real_frames=real_frames, clean_speech=s, hidden=train_hidden)
                 # net_work(mix=mix_in, anchor=anchor, tgt=s_in, spk_tgt=spk_tgt_tmp, spk_id=spk_id, is_spk=False, hidden=train_hidden)
             optim.zero_grad()

@@ -26,9 +26,6 @@ class CTC(torch.nn.Module):
     """CTC module"""
     def __init__(
         self,
-        odim: int,
-        encoder_output_size: int,
-        dropout_rate: float = 0.0,
         reduce: bool = True,
     ):
         """ Construct CTC module
@@ -39,14 +36,11 @@ class CTC(torch.nn.Module):
             reduce: reduce the CTC loss into a scalar
         """
         super().__init__()
-        eprojs = encoder_output_size
-        self.dropout_rate = dropout_rate
-        self.ctc_lo = torch.nn.Linear(eprojs, odim)
 
         reduction_type = "sum" if reduce else "none"
         self.ctc_loss = torch.nn.CTCLoss(reduction=reduction_type)
 
-    def forward(self, hs_pad: torch.Tensor, hlens: torch.Tensor,
+    def forward(self, ys_hat: torch.Tensor, hlens: torch.Tensor,
                 ys_pad: torch.Tensor, ys_lens: torch.Tensor) -> torch.Tensor:
         """Calculate CTC loss.
 
@@ -56,8 +50,6 @@ class CTC(torch.nn.Module):
             ys_pad: batch of padded character id sequence tensor (B, Lmax)
             ys_lens: batch of lengths of character sequence (B)
         """
-        # hs_pad: (B, L, NProj) -> ys_hat: (B, L, Nvocab)
-        ys_hat = self.ctc_lo(F.dropout(hs_pad, p=self.dropout_rate))
         # ys_hat: (B, L, D) -> (L, B, D)
         ys_hat = ys_hat.transpose(0, 1)
         ys_hat = ys_hat.log_softmax(2)
@@ -106,9 +98,9 @@ class Fbank(nn.Module):
         spec = self.stft.transform(input_waveform) # [b, 201, 897]
         mag = (spec ** 2).sum(-1).sqrt()
         abs_mel = torch.matmul(mag, self.linear_to_mel_weight_matrix.to(input_waveform.device))
-        # abs_mel = abs_mel + 1e-4
-        # log_mel = abs_mel.log()
-        # log_mel[log_mel < -6] = -6
+        abs_mel = abs_mel + 1e-4
+        log_mel = abs_mel.log()
+        log_mel[log_mel < -6] = -6
         return abs_mel
 
 
@@ -172,12 +164,12 @@ class TCNBlock(nn.Module):
             kernel_size=kernel_size,
             dilation=dilation,
         )
-        self.relu1 = nn.ReLU()
+        self.prelu1 = nn.PReLU(res_channels // 2)
 
         self.conv2 = nn.Conv1d(in_channels=res_channels // 2,
                                out_channels=res_channels,
                                kernel_size=1)
-        self.relu2 = nn.ReLU()
+        self.prelu2 = nn.PReLU(res_channels)
 
     def forward(self, xs: torch.Tensor, xs_lens=None, cnn_cache=None):
         if cnn_cache is None:
@@ -195,13 +187,13 @@ class TCNBlock(nn.Module):
             new_cache = torch.cat(new_cache, axis=0)
         # new_cache = inputs[:, :, -self.receptive_fields:]
 
-        outputs = self.relu1(self.conv1(inputs))
+        outputs = self.prelu1(self.conv1(inputs))
         outputs = self.conv2(outputs)
         inputs = inputs[:, :, self.receptive_fields:]  
         if self.in_channels == self.res_channels:
-            res_out = self.relu2(outputs + inputs)
+            res_out = self.prelu2(outputs + inputs)
         else:
-            res_out = self.relu2(outputs)
+            res_out = self.prelu2(outputs)
         return res_out, new_cache.detach()
 
 
@@ -298,7 +290,7 @@ class MDTCSML(nn.Module):
                                      kernel_size,
                                      dilation=1,
                                      causal=causal)
-        self.relu = nn.ReLU()
+        self.prelu = nn.PReLU(res_channels)
         self.blocks = nn.ModuleList()
         self.receptive_fields = []
         self.receptive_fields.append(self.preprocessor.receptive_fields)
@@ -309,16 +301,17 @@ class MDTCSML(nn.Module):
             self.receptive_fields.append(self.blocks[-1].receptive_fields)
         self.stack_num = stack_num
         self.stack_size = stack_size
-        self.classifier_3 = torch.nn.Linear(res_channels, 3)
         
         self.fbank = Fbank(sample_rate=16000, filter_length=512, hop_length=256, n_mels=64)
         self.time_vad = TimeVad(256)
         vocab_size = 410 # 拼音分类
-        self.ctc = CTC(vocab_size, res_channels)
+        self.pinyin_fc = torch.nn.Linear(res_channels, vocab_size)
+        self.classifier = torch.nn.Linear(res_channels +  vocab_size, 3)
+        self.ctc = CTC()
 
         self.pinyin_embedding = nn.Parameter(torch.FloatTensor(vocab_size, 8), requires_grad=True)
         nn.init.normal_(self.pinyin_embedding, -1, 1)
-        self.custom_fc = nn.Linear(res_channels + 8 * 6, 2)
+        self.custom_class = nn.Linear(res_channels + vocab_size + 8 * 6, 2)
 
     def forward(self, wav, kw_target=None, ckw_target=None, real_frames=None, ckw_len=None, clean_speech=None, hidden=None, custom_in=None):
         if hidden is None:
@@ -336,12 +329,12 @@ class MDTCSML(nn.Module):
         with torch.no_grad():
             xs = self.fbank(wav)
         b, t, f = xs.size()
-        norm_xs = self.layer_norm(xs.reshape(b, t, 1, 64)).reshape(b, t, -1)
-        outputs = norm_xs.transpose(1, 2)
+        # norm_xs = self.layer_norm(xs.reshape(b, t, 1, 64)).reshape(b, t, -1)
+        outputs = xs.transpose(1, 2)
         outputs_list = []
         outputs_cache_list  = []
         outputs, new_cache = self.preprocessor(outputs, real_frames, hidden[0])
-        outputs = self.relu(outputs)
+        outputs = self.prelu(outputs)
         outputs_pre = outputs
         outputs_cache_list.append(new_cache)
         for i in range(len(self.blocks)):
@@ -351,31 +344,33 @@ class MDTCSML(nn.Module):
 
         outputs = sum(outputs_list)
         outputs = outputs.transpose(1, 2)
-        logist = self.classifier_3(outputs)
+        outputs = F.dropout(outputs, p=0.1)
+        pinyin_logist = self.pinyin_fc(outputs)
+        logist = self.classifier(torch.cat([outputs, pinyin_logist], dim=-1))
         if custom_in is not None:
             embedding = torch.index_select(self.pinyin_embedding, dim=0, index=custom_in)
             embedding = torch.tile(embedding.reshape(b, 1, -1), [1, t, 1])
-            feat = torch.cat([outputs, embedding], dim=-1)
-            custom_logits = torch.softmax(self.custom_fc(feat), dim=-1)
+            feat = torch.cat([pinyin_logist, outputs, embedding], dim=-1)
+            custom_logits = torch.softmax(self.custom_class(feat), dim=-1)
 
         if kw_target is not None:
             l2_loss = self.l2_regularization(l2_alpha=1)
             outputs_list.append(outputs_pre)
             l2_f_loss = self.l2_regularization_feature(outputs_list)
-            kws_loss, acc = self.max_pooling_loss_vad(logist, kw_target)
-            custom_loss, acc2 = self.custom_kws_loss(outputs, ckw_target, ckw_len)
-            ctc_loss = self.ctc(outputs, real_frames, ckw_target, ckw_len)
-            loss = kws_loss + l2_f_loss + l2_loss + 3 * ctc_loss + custom_loss
+            kws_loss, acc = self.max_pooling_loss_vad(logist, kw_target, clean_speech, ckw_len)
+            custom_loss, acc2 = self.custom_kws_loss(outputs, ckw_target, pinyin_logist)
+            ctc_loss = self.ctc(pinyin_logist, real_frames, ckw_target, ckw_len)
+            loss = kws_loss + l2_f_loss + l2_loss + 1 * ctc_loss + 0*custom_loss
         else:
             loss = None
             acc = None
             acc2 = None
         if custom_in is not None:
-            return logist, outputs_cache_list, loss, acc, custom_logits
+            return logist, pinyin_logist, outputs_cache_list, loss, acc, acc2
         else:
-            return logist, outputs_cache_list, loss, acc, acc2
+            return logist, pinyin_logist, outputs_cache_list, loss, acc, acc2
 
-    def custom_kws_loss(self, encode_out, ckw_target, ckws_len):
+    def custom_kws_loss(self, encode_out, ckw_target, ys_hat):
         loss = 0.0
         non_keyword_weight = 4.0
         keyword_weight = 1.0
@@ -385,13 +380,13 @@ class MDTCSML(nn.Module):
         with torch.no_grad():
             ckw_target[ckw_target < 0] = 0
             for i in range(b):
-                if random.random() < 0.5:
+                if random.random() < 0.5: # 选取 label 作为 embedding
                     idx = ckw_target[i].detach()[:6]
                     rdm_start = random.randint(4, 6)
                     idx[rdm_start:] = 0
                     embedding = torch.index_select(self.pinyin_embedding, dim=0, index=idx)
                     label = 1
-                else:
+                else: # 随机选取作为 embedding
                     perm = torch.randperm(self.pinyin_embedding.size(0)).to(encode_out.device)
                     idx = perm[:6]
                     if random.random() < 0.5:
@@ -401,13 +396,21 @@ class MDTCSML(nn.Module):
                 embedding_l.append(embedding)
                 label_l.append(label)
             embedding = torch.tile(torch.stack(embedding_l, dim=0).reshape(b, 1, -1), [1, t, 1])
-
-        feat = torch.cat([encode_out, embedding], dim=-1)
-        logits = torch.softmax(self.custom_fc(feat), dim=-1)
+            perm = torch.randperm(b // 2).to(encode_out.device)
+            embedding_new = embedding.clone()
+            embedding_new[:b//2] = embedding[:b//2][perm]
+        feat = torch.cat([ys_hat, encode_out, embedding_new], dim=-1)
+        logits = torch.softmax(self.custom_class(feat), dim=-1)
         
         loss = 0
         for i in range(b):
-            if label_l[i] == 0:
+            if label_l[i] == 1 and (embedding[i] - embedding_new[i]).abs().sum() < 1:
+                # 唤醒词
+                prob1 = logits[i, :, 1]
+                prob1 = torch.clamp(prob1, 1e-8, 1.0)
+                max_prob, max_idx = torch.max(prob1, dim=0)
+                loss += -torch.log(max_prob) * keyword_weight
+            else:
                 # 非唤醒词
                 prob = logits[i, :, 0]
                 prob = torch.clamp(prob, 1e-8, 1.0)
@@ -418,12 +421,6 @@ class MDTCSML(nn.Module):
                 prob = torch.clamp(prob, 1e-8, 1.0)
                 max_prob = torch.amax(prob)
                 loss += torch.log(max_prob) * non_keyword_weight
-            else:
-                # 唤醒词
-                prob1 = logits[i, :, 1]
-                prob1 = torch.clamp(prob1, 1e-8, 1.0)
-                max_prob, max_idx = torch.max(prob1, dim=0)
-                loss += -torch.log(max_prob) * keyword_weight
                 
 
         loss = loss / b
@@ -443,12 +440,16 @@ class MDTCSML(nn.Module):
         # acc = 0.0
         return loss, acc
     
-    def max_pooling_loss_vad(self, logits, target):
-        logits = torch.softmax(logits, dim=-1)[:, 5:]
+    def max_pooling_loss_vad(self, logits, target, clean_speech, ckw_len):
+        logits_softmax = torch.softmax(logits, dim=-1)
+        logits = torch.log_softmax(logits, dim=-1)
+        label_vad, _ = self.time_vad(clean_speech)
+        start_f = torch.argmax(label_vad, dim=1)
+        last_f = label_vad.shape[1] - torch.argmax(torch.flip(label_vad, dims=[1]), dim=1) - 1
         num_utts = logits.size(0)
 
         loss = 0.0
-        non_keyword_weight = 4.0
+        non_keyword_weight = 2.0
         keyword_weight = 1.0
         for i in range(num_utts):
             # 唤醒词
@@ -456,27 +457,55 @@ class MDTCSML(nn.Module):
                 # 非唤醒词
                 prob = logits[i, :, 0]
                 # prob = prob.masked_fill(mask[i], 1.0)
-                prob = torch.clamp(prob, 1e-8, 1.0)
-                min_prob = prob.log().sum()
+                prob = torch.clamp(prob, -8)
+                min_prob = prob.sum()
                 loss += (-min_prob) * non_keyword_weight
                 # 查看醒词类别
                 prob = logits[i, :, 1:]
-                prob = torch.clamp(prob, 1e-8, 1.0)
+                prob = torch.clamp(prob, -8)
                 max_prob = torch.amax(prob)
-                loss += torch.log(max_prob) * non_keyword_weight
+                loss += max_prob * non_keyword_weight
             else:
                 # 唤醒词
                 prob = logits[i, :, target[i]]
-                prob1 = prob#[start_f[i]: last_f[i] + 5]
-                prob1 = torch.clamp(prob1, 1e-8, 1.0)
-                max_prob, max_idx = torch.max(prob1, dim=0)
-                loss += -torch.log(max_prob) * keyword_weight
-                
+                if random.random() < 0.01:
+                    if ckw_len[i] < 5 and last_f[i] < logits.size(1) - 10: # 非 oneshot
+                        start = last_f[i] - 2
+                    else:
+                        start = start_f[i] # oneshot 
+                    # if start_f[i] <= 0 or last_f[i] >= logits.size(1):
+                    #     print('start_f: {}, last_f: {}'.format(start_f[i], last_f[i]))
+                    if ckw_len[i] > 5:
+                        end = min(last_f[i] - 12, logits.size(1))
+                    else:
+                        end = min(last_f[i] + 3, logits.size(1))
+                    prob1 = prob[start: end]
+                    prob1 = torch.clamp(prob1, -8)
+                    max_prob, max_idx = torch.max(prob1, dim=0)
+                    loss += -max_prob * keyword_weight
+                    
+                    # prob2 = prob[:start]
+                    # prob2 = 1 - prob2
+                    # # prob2 = torch.clamp(prob2, 1e-8, 1.0)
+                    # prob2 = prob2.sum()
+                    # loss += -prob2
+                    
+                    # prob3 = prob[end:]
+                    # prob3 = 1 - prob3
+                    # # prob3 = torch.clamp(prob3, 1e-8, 1.0)
+                    # prob3 = prob3.sum()
+                    # loss += -prob3
+                else:
+                    prob1 = prob
+                    prob1 = torch.clamp(prob1, -8)
+                    max_prob, max_idx = torch.max(prob1, dim=0)
+                    loss += -max_prob * keyword_weight
+
 
         loss = loss / num_utts
 
         # Compute accuracy of current batch
-        max_logits, index = logits[:, :, 1:].max(1)
+        max_logits, index = logits_softmax[:, :, 1:].max(1)
         num_correct = 0
         for i in range(num_utts):
             max_p, idx = max_logits[i].max(0)
