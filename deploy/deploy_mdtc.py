@@ -141,7 +141,7 @@ class Fbank(nn.Module):
         abs_mel = abs_mel + 1e-4
         log_mel = abs_mel.log()
         log_mel[log_mel < -6] = -6
-        return abs_mel
+        return log_mel
 
 
 
@@ -345,7 +345,7 @@ class MDTCSML(nn.Module):
         self.fbank = Fbank(sample_rate=16000, filter_length=512, hop_length=256, n_mels=64)
         vocab_size = 410 # 拼音分类
         self.pinyin_fc = torch.nn.Linear(res_channels, vocab_size)
-        self.class_out_1 = torch.nn.Linear(res_channels +  vocab_size, 2)
+        self.class_out_2 = torch.nn.Linear(res_channels +  vocab_size, 3)
         self.ctc = CTC()
 
         self.pinyin_embedding = nn.Parameter(torch.FloatTensor(vocab_size, 8), requires_grad=True)
@@ -355,15 +355,6 @@ class MDTCSML(nn.Module):
     def forward(self, wav, kw_target=None, ckw_target=None, real_frames=None, ckw_len=None, clean_speech=None, hidden=None, custom_in=None):
         if hidden is None:
             hidden = [None for _ in range(self.stack_size * self.stack_num + 1)]
-        else:
-            if hidden[0].shape[0] >= wav.shape[0]:
-                b = wav.size(0)
-                h_l = []
-                for h in hidden:
-                    h_l.append(h[:b])
-                hidden = h_l
-            else:
-                hidden = [None for _ in range(self.stack_size * self.stack_num + 1)]
                 
         with torch.no_grad():
             xs = self.fbank(wav)
@@ -385,14 +376,14 @@ class MDTCSML(nn.Module):
         outputs = outputs.transpose(1, 2)
         outputs = F.dropout(outputs, p=0.1)
         pinyin_logist = self.pinyin_fc(outputs)
-        logist = self.class_out_1(torch.cat([outputs, pinyin_logist], dim=-1))
+        logist = self.class_out_2(torch.cat([outputs, pinyin_logist], dim=-1))
         logist = torch.softmax(logist, dim=-1)
         return logist
 
 if __name__ == '__main__':
     THRES_HOLD = 0.5
     net_work = MDTCSML(stack_num=4, stack_size=4, in_channels=64, res_channels=128, kernel_size=7, causal=True)
-    resume_model(net_work, './model/student_model/model-601500-1.0317201238870621.pickle')
+    resume_model(net_work, './model/student_model/model-1323500-3.213166663646698.pickle')
     net_work.eval()
     import soundfile as sf
     data, _ = sf.read('./process/test_wav/nihaoaodi.wav')
