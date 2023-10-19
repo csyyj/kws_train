@@ -45,25 +45,33 @@ if __name__ == '__main__':
                 t = mix_c.size(-1)
                 if t > 16000 * 200:
                     l = []
+                    ll = []
                     hidden = None
                     for i in range(t // (16000 * 200) + 1):
                         tmp_in = mix_c[..., i * 16000 * 200:(i + 1) * 16000 * 200]
                         if tmp_in.size(0) < 1:
                             break
-                        logist, _, hidden, _, _, _ = net_work(tmp_in, hidden=hidden)
+                        logist, pinyin_logist, hidden, _, _, _ = net_work(tmp_in, hidden=hidden)
                         l.append(logist)
+                        ll.append(pinyin_logist)
                     est = torch.cat(l, dim=1)
+                    est_pinyin = torch.cat(ll, dim=1)
                 else:
-                    est, _, _, _, _, _ = net_work(mix_c)
+                    est, est_pinyin, _, _, _, _ = net_work(mix_c)
                 est_logist, max_idx = (torch.softmax(est, dim=-1).squeeze()[:, 1:]).max(1)
+                est_pinyin_logist = torch.softmax(est_pinyin, dim=-1).squeeze()
                 est_kws = torch.zeros_like(mix_c)
                 count = 0
                 k = 0
                 while k < est_logist.size(0):
                     if est_logist[k] > THRES_HOLD:
-                        est_kws[:, k * 256] = 1 - 0.1 * (max_idx[k] + 1)
-                        count += 1
-                        k += 120
+                        if est_pinyin_logist[k-5:k+5, 355].sum() > 0:
+                            est_kws[:, k * 256] = 1 - 0.1 * (max_idx[k] + 1)
+                            count += 1
+                            k += 20
+                        else:
+                            k += 1
+                            # print('bypass one')
                     else:
                         k += 1
                 count_l.append(count)

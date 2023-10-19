@@ -346,7 +346,7 @@ class CZDataset(Dataset):
     
     def _get_long_wav(self, is_key=None):
         if is_key is None:
-            if random.random() < 0.3:
+            if random.random() < 0.5:
                 is_key = True
             else:
                 is_key = False

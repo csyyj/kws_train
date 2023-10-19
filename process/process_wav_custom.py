@@ -4,7 +4,7 @@ import sys
 from train.train_script_1mic import *
 from tools.stft_istft import *
 
-MIX_WAV_FILE_PATH = './process/test_wav'
+MIX_WAV_FILE_PATH = './process/custom'
 PROCESS_EXT = 'elevoc_process'
 THRES_HOLD = 0.5
 eval_keywords = [['li'],
@@ -14,7 +14,7 @@ eval_keywords = [['li'],
 
 # eval_keywords = [['ni'],
 #                  ['hao'],
-#                  ['ao'],
+#                  ['xiao'],
 #                  ['di']]
 
 def gen_target_file_list(target_dir, target_ext='.wav'):
