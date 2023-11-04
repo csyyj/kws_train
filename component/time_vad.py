@@ -22,12 +22,14 @@ class TimeVad(object):
         frame_wav = self.__frame__(in_wav)
         pow = (frame_wav ** 2).sum(-1)
         pow_db = 10 * torch.log10(pow + 1e-7)
-        sorted, indices = torch.sort(pow_db, dim=-1)
-        mean_pow = sorted[:, -25:].mean(-1, keepdim=True)
-        frame_vad = torch.where(pow_db <= (mean_pow - 25), torch.zeros_like(pow_db),
+        threshold = pow_db[:, :20].amax(-1, keepdim=True) + 10
+        # sorted, indices = torch.sort(pow_db, dim=-1)
+        # mean_pow = sorted[:, -50:].mean(-1, keepdim=True)
+        # threshold = mean_pow - 15
+        frame_vad = torch.where(pow_db <= threshold, torch.zeros_like(pow_db),
                                 torch.ones_like(pow_db)).unsqueeze(dim=-1)
         # in_wav为全0时，mean_pow为-70
-        zero_check = torch.where(mean_pow < -69, torch.zeros_like(mean_pow), torch.ones_like(mean_pow))
+        zero_check = torch.where(threshold < -60, torch.zeros_like(pow_db), torch.ones_like(pow_db))
         frame_vad = frame_vad * zero_check.unsqueeze(dim=-1)
         sample_vad = frame_vad.repeat(1, 1, self.shift).reshape(in_wav.shape[0], -1)[:, :in_wav.shape[-1]]
         return frame_vad, sample_vad

@@ -138,10 +138,10 @@ class Fbank(nn.Module):
         spec = self.stft.transform(input_waveform) # [b, 201, 897]
         mag = (spec ** 2).sum(-1).sqrt()
         abs_mel = torch.matmul(mag, self.linear_to_mel_weight_matrix.to(input_waveform.device))
-        abs_mel = abs_mel + 1e-4
+        # abs_mel = abs_mel + 1e-4
         log_mel = abs_mel.log()
         log_mel[log_mel < -6] = -6
-        return log_mel
+        return log_mel, abs_mel
 
 
 
@@ -322,7 +322,7 @@ class MDTCSML(nn.Module):
         causal: bool,
     ):
         super(MDTCSML, self).__init__()
-        self.layer_norm = nn.LayerNorm([1, 64])
+        self.layer_norm_in = nn.LayerNorm([5, 64])
         self.kernel_size = kernel_size
         self.causal = causal
         self.preprocessor = TCNBlock(in_channels,
@@ -351,16 +351,19 @@ class MDTCSML(nn.Module):
         self.pinyin_embedding = nn.Parameter(torch.FloatTensor(vocab_size, 8), requires_grad=True)
         nn.init.normal_(self.pinyin_embedding, -1, 1)
         self.custom_class = nn.Linear(res_channels + vocab_size + 8 * 6, 2)
+        self.drop_out = nn.Dropout(p=0.1)
 
     def forward(self, wav, kw_target=None, ckw_target=None, real_frames=None, ckw_len=None, clean_speech=None, hidden=None, custom_in=None):
         if hidden is None:
             hidden = [None for _ in range(self.stack_size * self.stack_num + 1)]
                 
         with torch.no_grad():
-            xs = self.fbank(wav)
+            xs_log, xs = self.fbank(wav)
         b, t, f = xs.size()
-        # norm_xs = self.layer_norm(xs.reshape(b, t, 1, 64)).reshape(b, t, -1)
-        outputs = xs.transpose(1, 2)
+        xs_pad = F.pad(xs, [0, 0, 4, 0])
+        xs_stack = torch.stack([xs_pad[:, :-4], xs_pad[:, 1:-3], xs_pad[:, 2:-2], xs_pad[:, 3:-1], xs_pad[:, 4:]], dim=2)
+        norm_xs = self.layer_norm_in(xs_stack)[:, :, -1]
+        outputs = norm_xs.transpose(1, 2)
         outputs_list = []
         outputs_cache_list  = []
         outputs, new_cache = self.preprocessor(outputs, real_frames, hidden[0])
@@ -374,7 +377,7 @@ class MDTCSML(nn.Module):
 
         outputs = sum(outputs_list)
         outputs = outputs.transpose(1, 2)
-        outputs = F.dropout(outputs, p=0.1)
+        outputs = self.drop_out(outputs)
         pinyin_logist = self.pinyin_fc(outputs)
         logist = self.class_out_2(torch.cat([outputs, pinyin_logist], dim=-1))
         logist = torch.softmax(logist, dim=-1)
@@ -383,7 +386,7 @@ class MDTCSML(nn.Module):
 if __name__ == '__main__':
     THRES_HOLD = 0.5
     net_work = MDTCSML(stack_num=4, stack_size=4, in_channels=64, res_channels=128, kernel_size=7, causal=True)
-    resume_model(net_work, './model/student_model/model-1323500-3.213166663646698.pickle')
+    resume_model(net_work, './model/student_model/model-1878000-6.6189833569526675.pickle')
     net_work.eval()
     import soundfile as sf
     data, _ = sf.read('./process/test_wav/nihaoaodi.wav')

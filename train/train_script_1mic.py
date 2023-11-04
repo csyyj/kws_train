@@ -74,7 +74,7 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
             # s = torch.cat([s, s], dim=0)
             # label_idx = torch.cat([label_idx, label_idx], dim=0)   
             # wav, kw_target=None, ckw_target=None, real_frames=None, ckw_len=None, clean_speech=None, hidden=None, custom_in=  
-            logist, _,  train_hidden, loss, acc, acc2 = \
+            logist, _,  train_hidden, loss, acc, acc2, vad_speech = \
                 net_work(enhance_data, kw_target=label_idx, ckw_target=custom_label, ckw_len=custom_label_len, real_frames=real_frames, clean_speech=s, hidden=train_hidden)
                 # net_work(mix=mix_in, anchor=anchor, tgt=s_in, spk_tgt=spk_tgt_tmp, spk_id=spk_id, is_spk=False, hidden=train_hidden)
             optim.zero_grad()
@@ -117,13 +117,13 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
                     in_np = enhance_data.to(torch.float32).detach().cpu().numpy()
                     s_np = s.to(torch.float32).detach().cpu().numpy()
                     target_np = label_idx.to(torch.long).detach().cpu().numpy()
+                    vad_speech_np = vad_speech.to(torch.float32).detach().cpu().numpy()
                     # data_np = np.stack([in_np, s_np], axis=-1)
                     if not os.path.exists(TRAINING_CHECK_PATH):
                         os.mkdir(TRAINING_CHECK_PATH)
                     for i in range(s_np.shape[0]):
                         sf.write('{}/{}_enhance_{}.wav'.format(TRAINING_CHECK_PATH, i, target_np[i]), in_np[i], 16000)
-                        # sf.write('{}/{}_mix_{}.wav'.format(TRAINING_CHECK_PATH, i, target_np[i]), mix_np[i], 16000)
-
+                        sf.write('{}/{}_vad_{}.wav'.format(TRAINING_CHECK_PATH, i, target_np[i]), vad_speech_np[i], 16000)
                 
     return net_work
 

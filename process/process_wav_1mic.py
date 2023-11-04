@@ -4,9 +4,9 @@ import sys
 from train.train_script_1mic import *
 from tools.stft_istft import *
 
-MIX_WAV_FILE_PATH = './process/test_wav'
+MIX_WAV_FILE_PATH = './process/test_wav2'
 PROCESS_EXT = 'elevoc_process'
-THRES_HOLD = 0.5
+THRES_HOLD = 0.8
 
 def gen_target_file_list(target_dir, target_ext='.wav'):
     l = []
@@ -51,13 +51,13 @@ if __name__ == '__main__':
                         tmp_in = mix_c[..., i * 16000 * 200:(i + 1) * 16000 * 200]
                         if tmp_in.size(0) < 1:
                             break
-                        logist, pinyin_logist, hidden, _, _, _ = net_work(tmp_in, hidden=hidden)
+                        logist, pinyin_logist, hidden, _, _, _, _ = net_work(tmp_in, hidden=hidden)
                         l.append(logist)
                         ll.append(pinyin_logist)
                     est = torch.cat(l, dim=1)
                     est_pinyin = torch.cat(ll, dim=1)
                 else:
-                    est, est_pinyin, _, _, _, _ = net_work(mix_c)
+                    est, est_pinyin, _, _, _, _, _ = net_work(mix_c)
                 est_logist, max_idx = (torch.softmax(est, dim=-1).squeeze()[:, 1:]).max(1)
                 est_pinyin_logist = torch.softmax(est_pinyin, dim=-1).squeeze()
                 est_kws = torch.zeros_like(mix_c)
