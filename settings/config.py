@@ -1,7 +1,7 @@
 import os
 import torch
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
 
 TRAIN_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -101,6 +101,7 @@ TRAINING_BACKGROUND = [
 
 TRAINING_KEY_WORDS = [#'/mnt/raid2/user_space/yanyongjie/asr/pickle/理想同学.pickle',
                       ['/mnt/raid2/user_space/yanyongjie/asr/pickle/你好奥迪.pickle',
+                       '/mnt/raid2/user_space/yanyongjie/asr/keywords_marked/你好奥迪.pickle',
                      '/mnt/raid2/user_space/yanyongjie/asr/pickle/你好奥迪导航回家.pickle'],
                       '/mnt/raid2/user_space/yanyongjie/asr/pickle/理想同学.pickle',
                       ]
@@ -127,6 +128,6 @@ MODEL_NAME = ''#'model-238500-0.08611498154699802'#'model-247500--34.43426759719
 
 PRINT_TIMES = 100
 
-TEST_TIMES = 500
+TEST_TIMES = 1000
 
 TRAIN_FRQ_RESPONSE = '/home/yanyongjie/train_data/fir/fir_1000000.npy'

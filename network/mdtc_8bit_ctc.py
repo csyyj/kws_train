@@ -284,7 +284,7 @@ class MDTCSML(nn.Module):
         causal: bool,
     ):
         super(MDTCSML, self).__init__()
-        self.layer_norm_in = nn.LayerNorm([5, 64])
+        self.layer_norm = nn.LayerNorm([5, 8])
         self.kernel_size = kernel_size
         self.causal = causal
         self.preprocessor = TCNBlock(in_channels,
@@ -316,7 +316,7 @@ class MDTCSML(nn.Module):
         nn.init.normal_(self.pinyin_embedding, -1, 1)
         self.custom_class = nn.Linear(res_channels + vocab_size + 8 * 6, 2)
 
-    def forward(self, wav, kw_target=None, ckw_target=None, real_frames=None, ckw_len=None, clean_speech=None, hidden=None, custom_in=None):
+    def forward(self, wav, kw_target=None, ckw_target=None, real_frames=None, label_frames=None, ckw_len=None, clean_speech=None, hidden=None, custom_in=None):
         if hidden is None:
             hidden = [None for _ in range(self.stack_size * self.stack_num + 1)]
         else:
@@ -333,8 +333,8 @@ class MDTCSML(nn.Module):
             xs = self.fbank(wav)
         b, t, f = xs.size()
         xs_pad = F.pad(xs, [0, 0, 4, 0])
-        xs_stack = torch.stack([xs_pad[:, :-4], xs_pad[:, 1:-3], xs_pad[:, 2:-2], xs_pad[:, 3:-1], xs_pad[:, 4:]], dim=2)
-        norm_xs = self.layer_norm_in(xs_stack)[:, :, -1]
+        xs_stack = torch.stack([xs_pad[:, :-4], xs_pad[:, 1:-3], xs_pad[:, 2:-2], xs_pad[:, 3:-1], xs_pad[:, 4:]], dim=2) # [B, T, 5, 64]
+        norm_xs = self.layer_norm(xs_stack.reshape(b, t, 5, 8, 8).permute(0, 1, 3, 2, 4)).permute(0, 1, 3, 2, 4).reshape(b, t, 5, 64)[:, :, -1]
         outputs = norm_xs.transpose(1, 2)
         outputs_list = []
         outputs_list_for_loss = []
@@ -369,7 +369,7 @@ class MDTCSML(nn.Module):
             l2_loss = self.l2_regularization(l2_alpha=1)
             outputs_list.append(outputs_pre)
             l2_f_loss = self.l2_regularization_feature(outputs_list_for_loss)
-            kws_loss, acc, vad_speech = self.max_pooling_loss_vad(logist, kw_target, clean_speech, ckw_len, real_frames)
+            kws_loss, acc, vad_speech = self.max_pooling_loss_vad(logist, kw_target, clean_speech, ckw_len, real_frames, label_frames)
             custom_loss, acc2 = self.custom_kws_loss(outputs, ckw_target, pinyin_logist)
             ctc_loss = self.ctc(pinyin_logist, real_frames, ckw_target, ckw_len)
             loss = kws_loss + l2_f_loss + l2_loss + ctc_loss #+ 0*custom_loss
@@ -453,7 +453,7 @@ class MDTCSML(nn.Module):
         # acc = 0.0
         return loss, acc
     
-    def max_pooling_loss_vad(self, logits, target, clean_speech, ckw_len, real_frames):
+    def max_pooling_loss_vad(self, logits, target, clean_speech, ckw_len, real_frames, label_frames):
         logits_softmax = torch.softmax(logits, dim=-1)
         logits = torch.log_softmax(logits, dim=-1)
         label_vad, _ = self.time_vad(clean_speech)
@@ -487,9 +487,10 @@ class MDTCSML(nn.Module):
                 # 唤醒词
                 prob = logits[i, :, target[i]]
                 prob = torch.clamp(prob, -8)
-                if random.random() < 0 and start_f[i] > 10 and last_f[i] < real_frames[i] - 10 and ckw_len[i] <= 5: # 非 oneshot
-                    start = last_f[i] + 1
-                    end = start + 3
+                label_frame = label_frames[i]
+                if label_frame > 1: # 非 oneshot
+                    start = label_frame - 1
+                    end = label_frame + 2
                     prob1 = prob[start: end]
                     max_prob, max_idx = torch.max(prob1, dim=0)
                     loss += -max_prob * keyword_weight
@@ -554,7 +555,7 @@ if __name__ == '__main__':
 
     target = torch.ones([1, 1], dtype=torch.long)
     clean_speech = torch.randn(1, 16000)
-    y, _, _, _, _, _ = mdtc(x)  # batch-size * time * dim
+    y, _, _, _, _, _, _ = mdtc(x)  # batch-size * time * dim
     print('input shape: {}'.format(x.shape))
     print('output shape: {}'.format(y.shape))
     

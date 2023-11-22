@@ -63,7 +63,7 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
         sum_c_acc = 0.0
         train_hidden = None
         for batch_info in batch_dataloader:
-            enhance_data, s, label_idx, custom_label, custom_label_len, real_frames = data_factory(batch_info=batch_info)
+            enhance_data, s, label_idx, custom_label, custom_label_len, real_frames, label_frames = data_factory(batch_info=batch_info)
             enhance_data = enhance_data.to(device)
             s = s.to(device)
             label_idx = label_idx.to(device)
@@ -75,7 +75,7 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
             # label_idx = torch.cat([label_idx, label_idx], dim=0)   
             # wav, kw_target=None, ckw_target=None, real_frames=None, ckw_len=None, clean_speech=None, hidden=None, custom_in=  
             logist, _,  train_hidden, loss, acc, acc2, vad_speech = \
-                net_work(enhance_data, kw_target=label_idx, ckw_target=custom_label, ckw_len=custom_label_len, real_frames=real_frames, clean_speech=s, hidden=train_hidden)
+                net_work(enhance_data, kw_target=label_idx, ckw_target=custom_label, ckw_len=custom_label_len, real_frames=real_frames, label_frames=label_frames, clean_speech=s, hidden=train_hidden)
                 # net_work(mix=mix_in, anchor=anchor, tgt=s_in, spk_tgt=spk_tgt_tmp, spk_id=spk_id, is_spk=False, hidden=train_hidden)
             optim.zero_grad()
             accelerator.backward(loss)

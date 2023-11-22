@@ -31,6 +31,7 @@ P_NOISE_KEY = 'p_noise'
 S_RIR_KEY = 's_rir_key'
 P_NOISE_RIR_KEY = 'p_noise_rir_key'
 NFRAMES_KEY = 'nframes'
+LABEL_FRAMES_KEY = 'label_frames'
 
 # dataset config
 # tuning
@@ -221,9 +222,10 @@ class CZDataset(Dataset):
         label_l = []
         label_len_l = []
         real_frames_l = []
+        label_frame_l = []
         for i in range(self.mic_num):
             if i in position:
-                s_tmp, key_idx, label, real_frames = self._get_long_wav()
+                s_tmp, key_idx, label, real_frames, label_frame = self._get_long_wav()
                 label_len_l.append(label.size)
             else:
                 s_tmp = np.zeros([self.wav_len], dtype=np.float32)
@@ -231,6 +233,7 @@ class CZDataset(Dataset):
                 label = np.array([-1], dtype=np.int64)
                 real_frames = self.wav_len // 256
                 label_len_l.append(0)
+                label_frame = -1
             if max_label_len < label.shape[0]:
                 max_label_len = label.shape[0]
             if key_idx > 0:
@@ -242,6 +245,7 @@ class CZDataset(Dataset):
             key_idx_l.append(key_idx)
             label_l.append(label)
             real_frames_l.append(real_frames)
+            label_frame_l.append(label_frame)
         
         # s_l_new = []
         label_l_new = []
@@ -256,6 +260,7 @@ class CZDataset(Dataset):
         label_len = np.array(label_len_l, dtype=np.int64)
         key_idx = np.array(key_idx_l, dtype=np.int64)
         real_frames = np.array(real_frames_l)
+        label_frames = np.array(label_frame_l)
         
         num_p_noise = random.randint(1, max(2, self.mic_num // 2 + 1))
         p_position, p_rirs = self._choice_rir(num_p_noise)
@@ -276,6 +281,7 @@ class CZDataset(Dataset):
         res_dict = {
             SPEECH_KEY: torch.from_numpy(s.astype(np.float32)),
             NFRAMES_KEY: torch.from_numpy(real_frames.astype(np.int64)),
+            LABEL_FRAMES_KEY: torch.from_numpy(label_frames.astype(np.int64)),
             KEY_WORDS_LEBEL: torch.from_numpy(key_idx.astype(np.int64)),
             CUSTOM_LABEL: torch.from_numpy(label.astype(np.int64)),
             CUSTOM_LABEL_LEN: torch.from_numpy(label_len.astype(np.int64)),
@@ -315,8 +321,9 @@ class CZDataset(Dataset):
         path = os.path.join('/mnt/raid2/user_space/yanyongjie/asr', info[1])
         if not os.path.exists(path):
             print('wav not find: {}'.format(path))
-            return None, None, False
+            return None, None, False, None
         npy_path = path.replace('.wav', '.npy')
+        label_path = path.replace('.wav', '.txt')
         if os.path.exists(npy_path):
             try:
                 data = np.load(npy_path, mmap_mode='c')
@@ -330,8 +337,18 @@ class CZDataset(Dataset):
             if fs != 16000:
                 data = librosa.resample(data, orig_sr=fs, target_sr=16000)
             np.save(npy_path, data.astype(np.float16))
+        if os.path.exists(label_path):
+            with open(label_path, 'r') as f:
+                try:
+                    label_sample = int(f.read())
+                    label_frame = label_sample // (16 * 16)
+                except:
+                    print('{} read error'.format(label_sample))
+                    return None, None, False, None
+        else:
+            label_frame = -1
         label = self.pinyin2idx(info[2], info)
-        return data, label, True
+        return data, label, True, label_frame
 
     def pinyin2idx(self, pin_yin, info):
         slice_in = pin_yin.split(' ')
@@ -357,7 +374,7 @@ class CZDataset(Dataset):
                 key_list = self.key_words_list[idx]
                 rdm_idx = random.randint(0, len(key_list) - 1)
                 bg_info = key_list[rdm_idx]
-                wav, label, success = self.gen_label_wav(bg_info)
+                wav, label, success, label_frame = self.gen_label_wav(bg_info)
                 if not success:
                     continue
                 wav = wav / (np.max(np.abs(wav)) + 1e-6)
@@ -371,7 +388,7 @@ class CZDataset(Dataset):
             while True:
                 idx = random.randint(0, len(self.bg_wav_list) - 1)
                 bg_info = self.bg_wav_list[idx]
-                wav, label, success = self.gen_label_wav(bg_info)
+                wav, label, success, label_frame = self.gen_label_wav(bg_info)
                 if not success:
                     continue
                 wav = wav / (np.max(np.abs(wav)) + 1e-6)
@@ -382,7 +399,7 @@ class CZDataset(Dataset):
             idx = 0
         real_frames = wav.shape[0] // 256
         wav = np.concatenate([wav, np.zeros([self.wav_len - wav.shape[0]], dtype=np.float64)], axis=-1)
-        return wav.astype(np.float32), idx, label, real_frames
+        return wav.astype(np.float32), idx, label, real_frames, label_frame
 
 
 class BatchDataLoader(DataLoader):
@@ -431,8 +448,8 @@ class GPUDataSimulate(nn.Module):
 
     def __call__(self, batch_info):
         with torch.no_grad():
-            s, n, p_n, s_rir, p_rir, label_idx, custom_label, custom_label_len, real_frames = \
-                batch_info.s, batch_info.road_n, batch_info.p_n, batch_info.s_rir, batch_info.p_rir, batch_info.label_idx, batch_info.custom_label, batch_info.custom_label_len, batch_info.real_frames
+            s, n, p_n, s_rir, p_rir, label_idx, custom_label, custom_label_len, real_frames, label_frames = \
+                batch_info.s, batch_info.road_n, batch_info.p_n, batch_info.s_rir, batch_info.p_rir, batch_info.label_idx, batch_info.custom_label, batch_info.custom_label_len, batch_info.real_frames, batch_info.label_frames
             mix, s, mix_no_inter = self.simulate_data(s, n, p_n, s_rir, p_rir)
             enhance_data, _, _ = self.net(mix)
             b, c, _ = enhance_data.size()
@@ -445,6 +462,7 @@ class GPUDataSimulate(nn.Module):
             label_idx_l = []
             custom_label_l = []
             real_frames_l = []
+            label_frames_l = []
             custom_label_len_l = []
             for i in range(enhance_data.size(0)):
                 if label_idx[i].sum().item() > 0:
@@ -460,6 +478,7 @@ class GPUDataSimulate(nn.Module):
                         label_idx_l.append(label_idx[i, 0])
                         custom_label_l.append(custom_label[i, :, 0])
                         real_frames_l.append(real_frames[i, 0])
+                        label_frames_l.append(label_frames[i, 0])
                         custom_label_len_l.append(custom_label_len[i, 0])
                     if label_idx[i, 1].item() > 0:
                         rdm_rate = random.random()
@@ -473,6 +492,7 @@ class GPUDataSimulate(nn.Module):
                         label_idx_l.append(label_idx[i, 1])
                         custom_label_l.append(custom_label[i, :, 1])
                         real_frames_l.append(real_frames[i, 1])
+                        label_frames_l.append(label_frames[i, 1])
                         custom_label_len_l.append(custom_label_len[i, 1])
                 else:
                     rdm_rate = random.random()
@@ -486,6 +506,7 @@ class GPUDataSimulate(nn.Module):
                     label_idx_l.append(label_idx[i, 0])
                     custom_label_l.append(custom_label[i, :, 0])
                     real_frames_l.append(real_frames[i, 0])
+                    label_frames_l.append(label_frames[i, 0])
                     custom_label_len_l.append(custom_label_len[i, 0])
                     
                     rdm_rate = random.random()
@@ -499,14 +520,16 @@ class GPUDataSimulate(nn.Module):
                     label_idx_l.append(label_idx[i, 1])
                     custom_label_l.append(custom_label[i, :, 1])
                     real_frames_l.append(real_frames[i, 1])
+                    label_frames_l.append(label_frames[i, 1])
                     custom_label_len_l.append(custom_label_len[i, 1])
             enhance_data = torch.stack(enhance_l, dim=0)
             s = torch.stack(s_l, dim=0)
             label_idx = torch.stack(label_idx_l, dim=0)
             custom_label = torch.stack(custom_label_l, dim=0)
             real_frames = torch.stack(real_frames_l, dim=0)
+            label_frames = torch.stack(label_frames_l, dim=0)
             custom_label_len = torch.stack(custom_label_len_l, dim=0)
-        return  enhance_data, s, label_idx, custom_label, custom_label_len, real_frames
+        return  enhance_data, s, label_idx, custom_label, custom_label_len, real_frames, label_frames
 
 
     def gen_hpf(self):
@@ -622,6 +645,7 @@ class SMBatchInfo(object):
     def __init__(self, batch_dict):
         super(SMBatchInfo, self).__init__()
         self.s = batch_dict[SPEECH_KEY] if SPEECH_KEY in batch_dict else None
+        self.label_frames = batch_dict[LABEL_FRAMES_KEY] if LABEL_FRAMES_KEY in batch_dict else None
         self.real_frames = batch_dict[NFRAMES_KEY] if NFRAMES_KEY in batch_dict else None
         self.label_idx = batch_dict[KEY_WORDS_LEBEL] if KEY_WORDS_LEBEL in batch_dict else None
         self.custom_label = batch_dict[CUSTOM_LABEL] if CUSTOM_LABEL in batch_dict else None
@@ -634,8 +658,8 @@ class SMBatchInfo(object):
 
 if __name__ == '__main__':
     from settings.config import *
-    dataset = CZDataset(TRAINING_KEY_WORDS, TRAINING_BACKGROUND, TRAINING_NOISE, TRAINING_RIR, POINT_NOISE_PATH,
-                        sample_rate=16000, speech_seconds=15)
+    dataset = CZDataset(PIN_YIN_CONFIG_PATH, TRAINING_KEY_WORDS, TRAINING_BACKGROUND, TRAINING_NOISE, TRAINING_RIR, POINT_NOISE_PATH,
+                        sample_rate=16000, speech_seconds=10)
     batch_dataloader = BatchDataLoader(dataset, batch_size=4, workers_num=0)
     car_zone_model_path = '/home/yanyongjie/code/official/car/car_zone_2_for_aodi_real/model/student_model/model-1200000--17.81806887626648.pickle'
     data_factory = GPUDataSimulate(TRAIN_FRQ_RESPONSE, ROAD_SNR_LIST, POINT_SNR_LIST, device='cpu', zone_model_path=car_zone_model_path)

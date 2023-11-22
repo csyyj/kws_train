@@ -6,7 +6,7 @@ from tools.stft_istft import *
 
 MIX_WAV_FILE_PATH = './process/test_wav2'
 PROCESS_EXT = 'elevoc_process'
-THRES_HOLD = 0.8
+THRES_HOLD = 0.5
 
 def gen_target_file_list(target_dir, target_ext='.wav'):
     l = []
