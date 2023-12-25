@@ -19,6 +19,7 @@ from simulate_data.gen_simulate_data_car_zone import BatchDataLoader, CZDataset,
 from datetime import datetime
 from accelerate import Accelerator
 from accelerate import DistributedDataParallelKwargs
+import torch_optimizer as t_optim
 
 torch.backends.cudnn.benchmark = True
 
@@ -42,12 +43,14 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
         except:
             rank = 0
             print('set rank 0')
-        set_seed(int(datetime.now().timestamp()) + rank)        
+        set_seed(int(datetime.now().timestamp()) + rank * 10)        
         dataset = CZDataset(PIN_YIN_CONFIG_PATH, TRAINING_KEY_WORDS, TRAINING_BACKGROUND, TRAINING_NOISE, TRAINING_RIR, POINT_NOISE_PATH,
                         sample_rate=16000, speech_seconds=10)
         batch_dataloader = BatchDataLoader(dataset, batch_size=BATCH_SIZE, workers_num=8)
         net_work, batch_dataloader, data_factory = accelerator.prepare(net_work, batch_dataloader, data_factory)
-    optim = torch.optim.Adam(filter(lambda p: p.requires_grad, net_work.parameters()), lr=LR)
+    # optim = torch.optim.Adam(filter(lambda p: p.requires_grad, net_work.parameters()), lr=LR)
+    base_optim = t_optim.RAdam(filter(lambda p: p.requires_grad, net_work.parameters()), lr=LR, weight_decay=1e-6)
+    optim = t_optim.Lookahead(base_optim, k=5, alpha=0.5)
     optim = accelerator.prepare(optim)
     step = 0
     if RESUME_MODEL:
@@ -113,6 +116,7 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
             if step % TEST_TIMES == 0 and rank == 0:
                 save_model(net_work.module, optim, step, avg_loss, models_dir=MODEL_DIR)
                 with torch.no_grad():
+                    logist = torch.softmax(logist, dim=-1)
                     # mix_np = mix_data.to(torch.float32).detach().cpu().numpy()
                     in_np = enhance_data.to(torch.float32).detach().cpu().numpy()
                     s_np = s.to(torch.float32).detach().cpu().numpy()
@@ -122,8 +126,13 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
                     if not os.path.exists(TRAINING_CHECK_PATH):
                         os.mkdir(TRAINING_CHECK_PATH)
                     for i in range(s_np.shape[0]):
-                        sf.write('{}/{}_enhance_{}.wav'.format(TRAINING_CHECK_PATH, i, target_np[i]), in_np[i], 16000)
-                        sf.write('{}/{}_vad_{}.wav'.format(TRAINING_CHECK_PATH, i, target_np[i]), vad_speech_np[i], 16000)
+                        amax, idx = torch.max(torch.amax(logist[i, :, 1:], dim=0), dim=0)
+                        if amax > 0.5:
+                            ext = idx + 1
+                        else:
+                            ext = 0
+                        sf.write('{}/{}_enhance_{}_{}.wav'.format(TRAINING_CHECK_PATH, i, target_np[i], ext), in_np[i], 16000)
+                        # sf.write('{}/{}_vad_{}.wav'.format(TRAINING_CHECK_PATH, i, target_np[i]), vad_speech_np[i], 16000)
                 
     return net_work
 

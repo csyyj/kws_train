@@ -88,7 +88,7 @@ class Fbank(nn.Module):
         self.stft = STFT(filter_length, hop_length)
         self.alpha = nn.Parameter(torch.FloatTensor(1, 257))
         nn.init.constant_(self.alpha, 3)
-        self.ln_0 = nn.LayerNorm([5, 4])
+        # self.ln_0 = nn.LayerNorm([5, 4])
         self.linear_to_mel_weight_matrix = torch.from_numpy(librosa.filters.mel(sr=sample_rate,
                                                                                 n_fft=filter_length,
                                                                                 n_mels=n_mels,
@@ -103,24 +103,24 @@ class Fbank(nn.Module):
         PAD_LEN = 4
         xs_pad = F.pad(mag, [0, 0, PAD_LEN, 0])
         b, t, _ = mag.size()
-        xs_stack = torch.stack([xs_pad[:, i: i + t, 1:] for i in range(PAD_LEN + 1)], dim=2) # [B, T, 5, 64]
-        norm_xs = self.ln_0(xs_stack.reshape(b, t, PAD_LEN + 1, -1, 4).permute(0, 1, 3, 2, 4)).permute(0, 1, 3, 2, 4).reshape(b, t, 5, -1)[:, :, -1]
-        norm_mag = F.pad(norm_xs, [1, 0])
-        # if self.training and False:
-        #     avg_mag = torch.cumsum(mag, dim=1) / (torch.arange(t).reshape(1, t, 1) + 1).to(input_waveform.device)
-        # else:
-        #     tmp = mag[:, 0]
-        #     l = []
-        #     for i in range(t):
-        #         alpha = torch.sigmoid(self.alpha)
-        #         tmp = alpha * tmp + (1 - alpha) * mag[:, i]
-        #         l.append(tmp)
-        #     avg_mag = torch.stack(l, dim=1)
+        # xs_stack = torch.stack([xs_pad[:, i: i + t, 1:] for i in range(PAD_LEN + 1)], dim=2) # [B, T, 5, 64]
+        # norm_xs = self.ln_0(xs_stack.reshape(b, t, PAD_LEN + 1, -1, 4).permute(0, 1, 3, 2, 4)).permute(0, 1, 3, 2, 4).reshape(b, t, 5, -1)[:, :, -1]
+        # norm_xs = F.pad(norm_xs, [1, 0])
+        if self.training and False:
+            avg_mag = torch.cumsum(mag, dim=1) / (torch.arange(t).reshape(1, t, 1) + 1).to(input_waveform.device)
+        else:
+            tmp = mag[:, 0]
+            l = []
+            for i in range(t):
+                alpha = torch.sigmoid(self.alpha)
+                tmp = alpha * tmp + (1 - alpha) * mag[:, i]
+                l.append(tmp)
+            avg_mag = torch.stack(l, dim=1)
                     
-        # norm_mag = mag / (avg_mag + 1e-8)
+        norm_mag = mag / (avg_mag + 1e-8)
         abs_mel = torch.matmul(norm_mag, self.linear_to_mel_weight_matrix.to(input_waveform.device))
-        # abs_mel = abs_mel + 1e-6
-        # log_mel = abs_mel.log()
+        abs_mel = abs_mel + 1e-6
+        log_mel = abs_mel.log()
         # log_mel[log_mel < -6] = -6
         return abs_mel
 
@@ -376,7 +376,7 @@ class MDTCSML(nn.Module):
             outputs_list_for_loss += o_l_tmp
             outputs_list.append(outputs)
             outputs_cache_list += new_caches
-
+        # outputs = self.pooling_relu(self.pooling_cnn(torch.stack(outputs_list, dim=1))).squeeze(dim=1)
         outputs = sum(outputs_list)
         outputs_list_for_loss.append(outputs)
         outputs = outputs.transpose(1, 2)

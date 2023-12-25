@@ -223,9 +223,23 @@ class CZDataset(Dataset):
         label_len_l = []
         real_frames_l = []
         label_frame_l = []
+        is_has_key = False
         for i in range(self.mic_num):
             if i in position:
-                s_tmp, key_idx, label, real_frames, label_frame = self._get_long_wav()
+                if not is_has_key:
+                    # if random.random() < (1 / (len(self.key_words_list) + 1)):
+                    if random.random() < 0.5 :
+                        is_key = False
+                    else:
+                        is_key = True
+                else:
+                    is_key = False
+                            
+                s_tmp, key_idx, label, real_frames, label_frame = self._get_long_wav(is_key=is_key)
+                if key_idx > 0:
+                    is_has_key = True
+                
+                # s_tmp = self._simulate_freq_response(s_tmp)
                 label_len_l.append(label.size)
             else:
                 s_tmp = np.zeros([self.wav_len], dtype=np.float32)
@@ -361,12 +375,7 @@ class CZDataset(Dataset):
                 print(info)
         return np.array(l, dtype=np.int64)
     
-    def _get_long_wav(self, is_key=None):
-        if is_key is None:
-            if random.random() < 0.5:
-                is_key = True
-            else:
-                is_key = False
+    def _get_long_wav(self, is_key):
         if is_key:
             # key word
             while True:
@@ -468,10 +477,12 @@ class GPUDataSimulate(nn.Module):
                 if label_idx[i].sum().item() > 0:
                     if label_idx[i, 0].item() > 0:
                         rdm_rate = random.random()
-                        if rdm_rate < 0.5:
+                        if rdm_rate < 0.8:
                             enhance_l.append(enhance_data[i, 0])
-                        elif rdm_rate < 0.7:
+                        elif rdm_rate < 0.9:
                             enhance_l.append(mix_no_inter[i, 0])
+                        elif rdm_rate < 0.95:
+                            enhance_l.append(mix[i, 0])
                         else:
                             enhance_l.append(s[i, 0])
                         s_l.append(s[i, 0])
@@ -486,6 +497,8 @@ class GPUDataSimulate(nn.Module):
                             enhance_l.append(enhance_data[i, 1])
                         elif rdm_rate < 0.7:
                             enhance_l.append(mix_no_inter[i, 1])
+                        elif rdm_rate < 0.9:
+                            enhance_l.append(mix[i, 1])
                         else:
                             enhance_l.append(s[i, 1])
                         s_l.append(s[i, 1])
@@ -500,6 +513,8 @@ class GPUDataSimulate(nn.Module):
                         enhance_l.append(enhance_data[i, 0])
                     elif rdm_rate < 0.7:
                         enhance_l.append(mix_no_inter[i, 0])
+                    elif rdm_rate < 0.9:
+                        enhance_l.append(mix[i, 0])
                     else:
                         enhance_l.append(s[i, 0])
                     s_l.append(s[i, 0])
@@ -514,6 +529,8 @@ class GPUDataSimulate(nn.Module):
                         enhance_l.append(enhance_data[i, 1])
                     elif rdm_rate < 0.7:
                         enhance_l.append(mix_no_inter[i, 1])
+                    elif rdm_rate < 0.9:
+                        enhance_l.append(mix[i, 1])
                     else:
                         enhance_l.append(s[i, 1])
                     s_l.append(s[i, 1])
@@ -523,7 +540,9 @@ class GPUDataSimulate(nn.Module):
                     label_frames_l.append(label_frames[i, 1])
                     custom_label_len_l.append(custom_label_len[i, 1])
             enhance_data = torch.stack(enhance_l, dim=0)
+            enhance_data, firs = self.simulate_freq_response(enhance_data, is_need_fir=True)
             s = torch.stack(s_l, dim=0)
+            s = self.simulate_freq_response(s, firs=firs)
             label_idx = torch.stack(label_idx_l, dim=0)
             custom_label = torch.stack(custom_label_l, dim=0)
             real_frames = torch.stack(real_frames_l, dim=0)

@@ -1,66 +1,26 @@
-import os
+#!/usr/bin/env python3
+# Copyright (c) 2021 Jingyong Hou (houjingyong@gmail.com)
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import torch
 import librosa
 import random
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
-from collections import OrderedDict
-
-def resume_model(net, models_path, device='cpu'):
-    # if is_map_to_cpu or not torch.cuda.is_available():
-    model_dict = torch.load(models_path, map_location=device)
-    state_dict = model_dict['state_dict']
-    for k, v in net.state_dict().items():
-        if k.split('.')[0] == 'module':
-            net_has_module = True
-        else:
-            net_has_module = False
-        break
-    dest_state_dict = OrderedDict()
-    for k, v in state_dict.items():
-        if k.split('.')[0] == 'module':
-            ckpt_has_module = True
-        else:
-            ckpt_has_module = False
-        if net_has_module == ckpt_has_module:
-            dest_state_dict = state_dict
-            break
-        if ckpt_has_module:
-            dest_state_dict[k.replace('module.', '')] = v
-        else:
-            dest_state_dict['module.{}'.format(k)] = v
-
-    net.load_state_dict(dest_state_dict, False)
-    step = model_dict['step']
-    optim_state = model_dict['optimizer']
-    print('finish to resume model {}.'.format(models_path))
-    return step, optim_state
-
-class STFT(torch.nn.Module):
-    def __init__(self, win_len=1024, shift_len=512, window=None):
-        super(STFT, self).__init__()
-        if window is None:
-            window = torch.from_numpy(np.sqrt(np.hanning(win_len).astype(np.float32)))
-        self.win_len = win_len
-        self.shift_len = shift_len
-        self.window = window
-    
-    def transform(self, input_data):
-        self.window = self.window.to(input_data.device)
-        spec = torch.stft(input_data, n_fft=self.win_len, hop_length=self.shift_len, win_length=self.win_len, window=self.window, center=True, pad_mode='constant', return_complex=True)
-        spec = torch.view_as_real(spec)
-        return spec.permute(0, 2, 1, 3)
-    
-    def inverse(self, spec):
-        self.window = self.window.to(spec.device)
-        torch_wav = torch.istft(torch.view_as_complex(torch.permute(spec, [0, 2, 1, 3])), n_fft=self.win_len, hop_length=self.shift_len, win_length=self.win_len, window=self.window, center=True)
-        return torch_wav
-    
-    def forward(self, input_data):
-        stft_res = self.transform(input_data)
-        reconstruction = self.inverse(stft_res)
-        return reconstruction
+from tools.torch_stft import STFT
+from component.time_vad import TimeVad
 
 class CTC(torch.nn.Module):
     """CTC module"""
@@ -138,10 +98,10 @@ class Fbank(nn.Module):
         spec = self.stft.transform(input_waveform) # [b, 201, 897]
         mag = (spec ** 2).sum(-1).sqrt()
         abs_mel = torch.matmul(mag, self.linear_to_mel_weight_matrix.to(input_waveform.device))
-        # abs_mel = abs_mel + 1e-4
-        # log_mel = abs_mel.log()
-        # log_mel[log_mel < -6] = -6
-        return abs_mel
+        abs_mel = abs_mel + 1e-4
+        log_mel = abs_mel.log()
+        log_mel[log_mel < -6] = -6
+        return log_mel
 
 
 
@@ -227,14 +187,14 @@ class TCNBlock(nn.Module):
             new_cache = torch.cat(new_cache, axis=0)
         # new_cache = inputs[:, :, -self.receptive_fields:]
 
-        outputs = self.prelu1(self.conv1(inputs))
-        outputs = self.conv2(outputs)
+        outputs1 = self.prelu1(self.conv1(inputs))
+        outputs2 = self.conv2(outputs1)
         inputs = inputs[:, :, self.receptive_fields:]  
         if self.in_channels == self.res_channels:
-            res_out = self.prelu2(outputs + inputs)
+            res_out = self.prelu2(outputs2 + inputs)
         else:
-            res_out = self.prelu2(outputs)
-        return res_out, new_cache.detach()
+            res_out = self.prelu2(outputs2)
+        return res_out, new_cache.detach(), [outputs1, outputs2, res_out]
 
 
 class TCNStack(nn.Module):
@@ -296,10 +256,12 @@ class TCNStack(nn.Module):
 
     def forward(self, xs: torch.Tensor, xs_lens=None, cnn_caches=None):
         new_caches = []
+        out_list_for_loss = []
         for block, cnn_cache in zip(self.res_blocks, cnn_caches):
-            xs, new_cache = block(xs, xs_lens, cnn_cache)
+            xs, new_cache, out_l = block(xs, xs_lens, cnn_cache)
             new_caches.append(new_cache)
-        return xs, new_caches
+            out_list_for_loss += out_l
+        return xs, new_caches, out_list_for_loss
 
 
 class MDTCSML(nn.Module):
@@ -322,7 +284,7 @@ class MDTCSML(nn.Module):
         causal: bool,
     ):
         super(MDTCSML, self).__init__()
-        self.layer_norm = nn.LayerNorm([5, 2])
+        self.layer_norm = nn.LayerNorm([5, 8])
         self.kernel_size = kernel_size
         self.causal = causal
         self.preprocessor = TCNBlock(in_channels,
@@ -343,66 +305,208 @@ class MDTCSML(nn.Module):
         self.stack_size = stack_size
         
         self.fbank = Fbank(sample_rate=16000, filter_length=512, hop_length=256, n_mels=64)
+        self.time_vad = TimeVad(256)
         vocab_size = 410 # 拼音分类
         self.pinyin_fc = torch.nn.Linear(res_channels, vocab_size)
         self.class_out = torch.nn.Linear(res_channels +  vocab_size, 16)
         self.ctc = CTC()
         self.drop_out = nn.Dropout(p=0.1)
 
-        self.pinyin_embedding = nn.Parameter(torch.FloatTensor(vocab_size, 8), requires_grad=True)
-        nn.init.normal_(self.pinyin_embedding, -1, 1)
-        self.custom_class = nn.Linear(res_channels + vocab_size + 8 * 6, 2)
-        self.drop_out = nn.Dropout(p=0.1)
-
     def forward(self, wav, kw_target=None, ckw_target=None, real_frames=None, label_frames=None, ckw_len=None, clean_speech=None, hidden=None, custom_in=None):
         if hidden is None:
             hidden = [None for _ in range(self.stack_size * self.stack_num + 1)]
+        else:
+            if hidden[0].shape[0] >= wav.shape[0]:
+                b = wav.size(0)
+                h_l = []
+                for h in hidden:
+                    h_l.append(h[:b])
+                hidden = h_l
+            else:
+                hidden = [None for _ in range(self.stack_size * self.stack_num + 1)]
                 
         with torch.no_grad():
             xs = self.fbank(wav)
+            
         b, t, f = xs.size()
         xs_pad = F.pad(xs, [0, 0, 4, 0])
         xs_stack = torch.stack([xs_pad[:, :-4], xs_pad[:, 1:-3], xs_pad[:, 2:-2], xs_pad[:, 3:-1], xs_pad[:, 4:]], dim=2) # [B, T, 5, 64]
         norm_xs = self.layer_norm(xs_stack.reshape(b, t, 5, 8, 8).permute(0, 1, 3, 2, 4)).permute(0, 1, 3, 2, 4).reshape(b, t, 5, 64)[:, :, -1]
         outputs = norm_xs.transpose(1, 2)
         outputs_list = []
+        outputs_list_for_loss = []
         outputs_cache_list  = []
-        outputs, new_cache = self.preprocessor(outputs, real_frames, hidden[0])
+        outputs, new_cache,  o_l_1= self.preprocessor(outputs, real_frames, hidden[0])
+        outputs_list_for_loss += o_l_1
         outputs = self.prelu(outputs)
+        outputs_list_for_loss.append(outputs)
         outputs_pre = outputs
         outputs_cache_list.append(new_cache)
         for i in range(len(self.blocks)):
-            outputs, new_caches = self.blocks[i](outputs, real_frames, hidden[1+i*self.stack_size: 1 +(i+1)*self.stack_size])
+            outputs, new_caches, o_l_tmp = self.blocks[i](outputs, real_frames, hidden[1+i*self.stack_size: 1 +(i+1)*self.stack_size])
+            outputs_list_for_loss += o_l_tmp
             outputs_list.append(outputs)
             outputs_cache_list += new_caches
 
         outputs = sum(outputs_list)
+        outputs_list_for_loss.append(outputs)
         outputs = outputs.transpose(1, 2)
         outputs = self.drop_out(outputs)
         pinyin_logist = self.pinyin_fc(outputs)
+        # outputs_list_for_loss.append(pinyin_logist)
         logist = self.class_out(torch.cat([outputs, pinyin_logist], dim=-1))
-        logist = torch.softmax(logist, dim=-1)
-        return logist
+        # outputs_list_for_loss.append(logist)
+
+        if kw_target is not None:
+            l2_loss = self.l2_regularization(l2_alpha=1)
+            outputs_list.append(outputs_pre)
+            l2_f_loss = self.l2_regularization_feature(outputs_list_for_loss)
+            kws_loss, acc, vad_speech = self.max_pooling_loss_vad(logist, kw_target, clean_speech, ckw_len, real_frames, label_frames)
+            ctc_loss = self.ctc(pinyin_logist, real_frames, ckw_target, ckw_len)
+            loss = kws_loss + l2_f_loss + l2_loss + 0 * ctc_loss
+            acc2 = 0
+        else:
+            loss = None
+            acc = None
+            acc2 = None
+            vad_speech = None
+        return logist, pinyin_logist, outputs_cache_list, loss, acc, acc2, vad_speech
+    
+    def max_pooling_loss_vad(self, logits_ori, target, clean_speech, ckw_len, real_frames, label_frames):
+        logits_softmax = torch.softmax(logits_ori, dim=-1)
+        logits = torch.clamp(torch.log_softmax(logits_ori, dim=-1), min=-8)
+        num_utts = logits.size(0)
+        
+        clean_speech_vad = clean_speech.detach()
+
+        loss = 0.0
+        non_keyword_weight = 1.0
+        keyword_weight = 20.0
+        for i in range(num_utts):
+            # 唤醒词
+            if target[i] == 0:
+                # 非唤醒词
+                prob = logits[i, :, 0]
+                # min_prob = prob.sum()
+                min_prob, _ = torch.min(prob, dim=0)
+                loss += (-min_prob) * non_keyword_weight
+                # 查看醒词类别
+                prob = logits[i, :, 1:]
+                # prob = torch.clamp(prob, -8)
+                max_prob = torch.amax(prob)
+                loss += max_prob * non_keyword_weight
+            else:
+                # 唤醒词
+                prob = logits[i, :, target[i]]
+                label_frame = label_frames[i]
+                if label_frame > 1: # 非 oneshot
+                    start = label_frame - 1
+                    end = label_frame + 2
+                    prob1 = prob[start: end]
+                    max_prob, max_idx = torch.max(prob1, dim=0)
+                    loss += -max_prob * keyword_weight
+                    
+                    prob2 = prob[:start - 1]                    
+                    # prob2 = torch.amax(prob2, dim=0)
+                    prob2 = prob2.sum()
+                    loss += prob2
+                    
+                    prob3 = prob[end + 1:]
+                    # prob3 = torch.amax(prob3, dim=0)
+                    prob3 = prob3.sum()
+                    loss += prob3
+                else:
+                    prob1 = prob
+                    max_prob, max_idx = torch.max(prob1, dim=0)
+                    loss += -max_prob * keyword_weight
+                    
+                # other 
+                prob_other = torch.cat([logits[i, :, target[i] + 1:], logits[i, :, 1:target[i]]], dim=-1)
+                # prob_other = torch.clamp(prob_other, -8)
+                max_prob_other = torch.amax(prob_other)
+                loss += max_prob_other * non_keyword_weight
+
+        loss = loss / num_utts
+        # Compute accuracy of current batch
+        with torch.no_grad():
+            max_logits, index = logits_softmax[:, :, 1:].max(1)
+            num_correct = 0
+            for i in range(num_utts):
+                max_p, idx = max_logits[i].max(0)
+                if max_p > 0.5 and (idx + 1 == target[i]):
+                    num_correct += 1
+                if max_p < 0.5 and target[i] == 0:
+                    num_correct += 1
+            acc = num_correct / num_utts
+        return loss, acc, clean_speech_vad
+    
+    def max_pooling_loss_vad_fast(self, logits, target, clean_speech, ckw_len, real_frames, label_frames):
+        logits = torch.log_softmax(logits, dim=-1)
+        b, t, c = logits.size()
+        clean_speech_vad = clean_speech.detach()
+        loss = 0.0
+        non_k_scale = 4.0
+        k_scale = 2.0
+        logits = torch.clamp(logits, -8)
+        kws_mask = torch.ones_like(target)
+        kws_mask[target < 1] = 0
+        # 非唤醒词
+        non_kws_a = -(logits[:, :, 0] * (1 - kws_mask).reshape(b, 1)).sum() * non_k_scale / ((1 - kws_mask).sum() + 1e-5)  # 0 分类求和越大越好
+        non_kws_b = (torch.amax(logits[:, :, 1:], dim=[1, 2]) * (1 - kws_mask).reshape(b)).sum() / ((1 - kws_mask).sum() + 1e-5) # 非 0 分类最大值越小越好
+        # 唤醒词
+        l = []
+        ll = []
+        for i in range(b):
+            tmp = torch.cat([logits[i, :, max(target[i] + 1, 2):], logits[i, :, 1:target[i]]], dim=-1)
+            l.append(tmp)
+            ll.append(logits[i, :, target[i]])
+        kws_logist = torch.stack(ll, dim=0)
+        kws_a = (-torch.amax(kws_logist, dim=1) * kws_mask.reshape(b) * k_scale).sum() / ((kws_mask).sum() + 1e-5) # 目标分类最大值越大越好
+        tmp = torch.stack(l, dim=0)
+        kws_b = (torch.amax(tmp, dim=(1, 2)) * kws_mask.reshape(b) * k_scale).sum() / ((kws_mask).sum() + 1e-5) # 非目标分类最大值越小越好
+        loss = (non_kws_a + non_kws_b +  kws_a + kws_b).mean()
+        with torch.no_grad():
+            logits_softmax = torch.softmax(logits, dim=-1)
+            max_logits, index = logits_softmax[:, :, 1:].max(1)
+            num_correct = 0
+            for i in range(b):
+                max_p, idx = max_logits[i].max(0)
+                if max_p > 0.5 and (idx + 1 == target[i]):
+                    num_correct += 1
+                if max_p < 0.5 and target[i] == 0:
+                    num_correct += 1
+            acc = num_correct / b
+        return loss, acc, clean_speech_vad
+    
+    def l2_regularization(self, l2_alpha=1):
+        l2_loss = []
+        for module in self.modules():
+            if type(module) is nn.Conv2d or type(module) is nn.Conv1d or type(module) is nn.PReLU:
+                l2_loss.append((module.weight ** 2).mean())
+        return l2_alpha * torch.stack(l2_loss, dim=0).mean()
+    
+    def l2_regularization_feature(self, features, l2_alpha=0.01):
+        l2_loss = []
+        for f in features:
+            l2_loss.append((f ** 2).mean())
+        return l2_alpha * torch.stack(l2_loss, dim=0).mean()
+
 
 if __name__ == '__main__':
-    THRES_HOLD = 0.5
-    net_work = MDTCSML(stack_num=4, stack_size=4, in_channels=64, res_channels=128, kernel_size=7, causal=True)
-    resume_model(net_work, './model/student_model/model-105000--1.3575362062454224.pickle')
-    net_work.eval()
-    import soundfile as sf
-    data, _ = sf.read('./process/test_wav/xiaojing.wav')
-    with torch.no_grad():
-        data_in = torch.from_numpy(data.astype(np.float32)).reshape(1, -1)
-        est_logist = net_work(data_in)
-        est_logist = est_logist.squeeze()[:, 1]
-    
-        count = 0
-        k = 0
-        while k < est_logist.size(0):
-            if est_logist[k] > THRES_HOLD:
-                count += 1
-                k += 30
-            else:
-                k += 1
-        print(count)
+    from thop import profile, clever_format
+    mdtc = MDTCSML(stack_num=4, stack_size=4, in_channels=64, res_channels=128, kernel_size=7, causal=True)
+    # print(mdtc)
+    # torch.save({'state_dict': mdtc.state_dict()}, 'mdtc.pickle')
+    num_params = sum(p.numel() for p in mdtc.parameters())
+    print('the number of model params: {}'.format(num_params))
+    x = torch.zeros(1, 160000)  # batch-size * time * dim
+    total_ops, total_params = profile(mdtc, inputs=(x,), verbose=False)
+    flops, params = clever_format([total_ops/10, total_params], "%.3f ")
+    print(flops, params)
+
+    target = torch.ones([1, 1], dtype=torch.long)
+    clean_speech = torch.randn(1, 16000)
+    y, _, _, _, _, _, _ = mdtc(x)  # batch-size * time * dim
+    print('input shape: {}'.format(x.shape))
+    print('output shape: {}'.format(y.shape))
     

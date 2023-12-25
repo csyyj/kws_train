@@ -4,7 +4,9 @@ import sys
 from train.train_script_1mic import *
 from tools.stft_istft import *
 
-MIX_WAV_FILE_PATH = './process/test_wav2'
+MIX_WAV_FILE_PATH = './process/wuling'
+#MIX_WAV_FILE_PATH = './process/test_wav'
+#MIX_WAV_FILE_PATH = './check'
 PROCESS_EXT = 'elevoc_process'
 THRES_HOLD = 0.5
 
@@ -65,13 +67,9 @@ if __name__ == '__main__':
                 k = 0
                 while k < est_logist.size(0):
                     if est_logist[k] > THRES_HOLD:
-                        if est_pinyin_logist[k-5:k+5, 355].sum() > 0:
-                            est_kws[:, k * 256] = 1 - 0.1 * (max_idx[k] + 1)
-                            count += 1
-                            k += 20
-                        else:
-                            k += 1
-                            # print('bypass one')
+                        est_kws[:, k * 256] = 0.1 * (max_idx[k] + 1)
+                        k += 20
+                        count += 1
                     else:
                         k += 1
                 count_l.append(count)

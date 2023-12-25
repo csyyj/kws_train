@@ -22,6 +22,24 @@ import torch.nn.functional as F
 from tools.torch_stft import STFT
 from component.time_vad import TimeVad
 
+class Conv2DNorm(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, out_ac=None):
+        super(Conv2DNorm, self).__init__()
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.out_ac = out_ac
+        self.weight = nn.Parameter(torch.FloatTensor(out_channels, in_channels, kernel_size[0], kernel_size[1]))
+        nn.init.normal_(self.weight, -3, 3)
+
+    def forward(self, log_feat):
+        zero_mean = self.weight - self.weight.mean(dim=(-3, -2, -1), keepdim=True)
+        res = F.conv2d(log_feat, zero_mean, None, stride=self.stride, padding=self.padding)
+        if self.out_ac is not None:
+            res = self.out_ac(res)
+        return res
+
+
 class CTC(torch.nn.Module):
     """CTC module"""
     def __init__(
@@ -86,9 +104,6 @@ class Fbank(nn.Module):
     def __init__(self, sample_rate=16000, filter_length=512, hop_length=256, n_mels=64):
         super(Fbank, self).__init__()
         self.stft = STFT(filter_length, hop_length)
-        self.alpha = nn.Parameter(torch.FloatTensor(1, 257))
-        nn.init.constant_(self.alpha, 3)
-        self.ln_0 = nn.LayerNorm([5, 4])
         self.linear_to_mel_weight_matrix = torch.from_numpy(librosa.filters.mel(sr=sample_rate,
                                                                                 n_fft=filter_length,
                                                                                 n_mels=n_mels,
@@ -100,29 +115,10 @@ class Fbank(nn.Module):
     def forward(self, input_waveform):
         spec = self.stft.transform(input_waveform) # [b, 201, 897]
         mag = (spec ** 2).sum(-1).sqrt()
-        PAD_LEN = 4
-        xs_pad = F.pad(mag, [0, 0, PAD_LEN, 0])
-        b, t, _ = mag.size()
-        xs_stack = torch.stack([xs_pad[:, i: i + t, 1:] for i in range(PAD_LEN + 1)], dim=2) # [B, T, 5, 64]
-        norm_xs = self.ln_0(xs_stack.reshape(b, t, PAD_LEN + 1, -1, 4).permute(0, 1, 3, 2, 4)).permute(0, 1, 3, 2, 4).reshape(b, t, 5, -1)[:, :, -1]
-        norm_mag = F.pad(norm_xs, [1, 0])
-        # if self.training and False:
-        #     avg_mag = torch.cumsum(mag, dim=1) / (torch.arange(t).reshape(1, t, 1) + 1).to(input_waveform.device)
-        # else:
-        #     tmp = mag[:, 0]
-        #     l = []
-        #     for i in range(t):
-        #         alpha = torch.sigmoid(self.alpha)
-        #         tmp = alpha * tmp + (1 - alpha) * mag[:, i]
-        #         l.append(tmp)
-        #     avg_mag = torch.stack(l, dim=1)
-                    
-        # norm_mag = mag / (avg_mag + 1e-8)
-        abs_mel = torch.matmul(norm_mag, self.linear_to_mel_weight_matrix.to(input_waveform.device))
-        # abs_mel = abs_mel + 1e-6
-        # log_mel = abs_mel.log()
-        # log_mel[log_mel < -6] = -6
-        return abs_mel
+        abs_mel = torch.matmul(mag, self.linear_to_mel_weight_matrix.to(input_waveform.device))
+        abs_mel = abs_mel + 1e-6
+        log_mel = abs_mel.log()
+        return log_mel
 
 
 
@@ -192,13 +188,13 @@ class TCNBlock(nn.Module):
                                kernel_size=1)
         self.prelu2 = nn.PReLU(res_channels)
 
-    def forward(self, xs: torch.Tensor, xs_lens=None, cnn_cache=None, is_last_cache=False):
+    def forward(self, xs: torch.Tensor, xs_lens=None, cnn_cache=None):
         if cnn_cache is None:
             # inputs = F.pad(xs, (self.receptive_fields, 0, 0, 0, 0, 0),
             #                 'constant')
             cnn_cache = torch.zeros([xs.shape[0], xs.shape[1], self.receptive_fields], dtype=xs.dtype, device=xs.device)
         inputs = torch.cat((cnn_cache, xs), dim=-1)
-        if xs_lens is None or is_last_cache:
+        if xs_lens is None or random.random() < 0.5:
             new_cache = inputs[:, :, -self.receptive_fields:]
         else:
             new_cache = []
@@ -275,11 +271,11 @@ class TCNStack(nn.Module):
                 ))
         return res_blocks
 
-    def forward(self, xs: torch.Tensor, xs_lens=None, cnn_caches=None, is_last_cache=False):
+    def forward(self, xs: torch.Tensor, xs_lens=None, cnn_caches=None):
         new_caches = []
         out_list_for_loss = []
         for block, cnn_cache in zip(self.res_blocks, cnn_caches):
-            xs, new_cache, out_l = block(xs, xs_lens, cnn_cache, is_last_cache=is_last_cache)
+            xs, new_cache, out_l = block(xs, xs_lens, cnn_cache)
             new_caches.append(new_cache)
             out_list_for_loss += out_l
         return xs, new_caches, out_list_for_loss
@@ -305,9 +301,11 @@ class MDTCSML(nn.Module):
         causal: bool,
     ):
         super(MDTCSML, self).__init__()
-        self.layer_norm = nn.LayerNorm([5, 2])
+        self.layer_norm = nn.LayerNorm([5, 8])
         self.kernel_size = kernel_size
         self.causal = causal
+        agc_prelu = nn.PReLU(1)
+        self.agc_cnn = Conv2DNorm(in_channels=1, out_channels=1, kernel_size=(3, 3), padding=(1, 1), out_ac=agc_prelu)
         self.preprocessor = TCNBlock(in_channels,
                                      res_channels,
                                      kernel_size,
@@ -322,8 +320,7 @@ class MDTCSML(nn.Module):
                 TCNStack(res_channels, stack_size, res_channels,
                          kernel_size, causal))
             self.receptive_fields.append(self.blocks[-1].receptive_fields)
-        self.pooling_cnn = nn.Conv2d(in_channels=stack_num, out_channels=1, kernel_size=(1, 1), bias=False)
-        self.pooling_relu = nn.PReLU(1)
+        
         self.stack_num = stack_num
         self.stack_size = stack_size
         
@@ -348,35 +345,28 @@ class MDTCSML(nn.Module):
             else:
                 hidden = [None for _ in range(self.stack_size * self.stack_num + 1)]
                 
-        
-        xs = self.fbank(wav)
+        with torch.no_grad():
+            xs = self.fbank(wav)
             
         b, t, f = xs.size()
-        if random.random() < 0.5 and self.training:
-            is_last_cache = True
-        else:
-            is_last_cache = False
-        # PAD_LEN = 4
-        # xs_pad = F.pad(xs, [0, 0, PAD_LEN, 0])
-        # xs_stack = torch.stack([xs_pad[:, i: i + t] for i in range(PAD_LEN + 1)], dim=2) # [B, T, 5, 64]
-        # norm_xs = self.layer_norm(xs_stack.reshape(b, t, PAD_LEN + 1, -1, 2).permute(0, 1, 3, 2, 4)).permute(0, 1, 3, 2, 4).reshape(b, t, -1, 64)[:, :, -1]
-        # outputs = norm_xs.transpose(1, 2)
-        outputs = xs.transpose(1, 2)
+        PAD_LEN = 4
+        norm_xs = self.agc_cnn(xs.unsqueeze(dim=1)).squeeze(dim=1)
+        outputs = norm_xs.transpose(1, 2)
         outputs_list = []
         outputs_list_for_loss = []
         outputs_cache_list  = []
-        outputs, new_cache,  o_l_1= self.preprocessor(outputs, real_frames, hidden[0], is_last_cache=is_last_cache)
+        outputs, new_cache,  o_l_1= self.preprocessor(outputs, real_frames, hidden[0])
         outputs_list_for_loss += o_l_1
         outputs = self.prelu(outputs)
         outputs_list_for_loss.append(outputs)
         outputs_pre = outputs
         outputs_cache_list.append(new_cache)
         for i in range(len(self.blocks)):
-            outputs, new_caches, o_l_tmp = self.blocks[i](outputs, real_frames, hidden[1+i*self.stack_size: 1 +(i+1)*self.stack_size], is_last_cache=is_last_cache)
+            outputs, new_caches, o_l_tmp = self.blocks[i](outputs, real_frames, hidden[1+i*self.stack_size: 1 +(i+1)*self.stack_size])
             outputs_list_for_loss += o_l_tmp
             outputs_list.append(outputs)
             outputs_cache_list += new_caches
-
+        # outputs = self.pooling_relu(self.pooling_cnn(torch.stack(outputs_list, dim=1))).squeeze(dim=1)
         outputs = sum(outputs_list)
         outputs_list_for_loss.append(outputs)
         outputs = outputs.transpose(1, 2)
@@ -453,21 +443,14 @@ class MDTCSML(nn.Module):
                     else:
                         if ckw_len[i] <= 5: # 非oneeshot
                             start = (start_f[i] + last_f[i]) // 2 + 3
-                            end = min(last_f[i] + 10, real_frames[i] - 10)
-                            # if last_f[i] + 5 > real_frames[i] - 10: # vad 有问题了，降级
-                            #     start = 10
-                            #     end = real_frames[i] - 10
-                            # else:
-                            #     start = last_f[i]
-                            #     end = min(last_f[i] + 20, real_frames[i] - 10)
+                            end = min(last_f[i] + 5, real_frames[i] - 10)
                         else: # oneshot
                             start = start_f[i] + 30
                             end = min(last_f[i] - 20, real_frames[i] - 20)
                     if start >= end:
                         start = 10
                         end = real_frames[i] - 10
-                    clean_speech_vad[i, :start] = 0
-                    clean_speech_vad[i, end:] = 0
+                
                 prob1 = prob[start: end]
                 max_prob, max_idx = torch.max(prob1, dim=0)
                 loss += -max_prob * keyword_weight
