@@ -1,8 +1,8 @@
 import os
 import pickle
 
-WAV_PATH = '/mnt/raid2/user_space/yanyongjie/asr/keywords_marked/你好奥迪'
-PICKLE_PATH = '/mnt/raid2/user_space/yanyongjie/asr/keywords_marked/你好奥迪.pickle'
+WAV_PATH = '/mnt/raid2/user_space/yanyongjie/asr/kws_words/enhance_data/nhxl'
+PICKLE_PATH = '/mnt/raid2/user_space/yanyongjie/asr/kws_words/enhance_data/nhxl/你好小菱.pickle'
 
 def gen_target_file_list(target_dir, target_ext='.wav'):
     l = []
@@ -20,6 +20,6 @@ if __name__ == '__main__':
     with open(PICKLE_PATH, 'wb') as f:
         l = []
         for idx, path in enumerate(wav_l):
-            tmp = ['nihaoaodi_{}'.format(idx), path.replace('/mnt/raid2/user_space/yanyongjie/asr/', ''), 'ni hao ao di', '你好奥迪']
+            tmp = ['nihaoxiaoling_{}'.format(idx), path.replace('/mnt/raid2/user_space/yanyongjie/asr/', ''), 'ni hao xiao ling', '你好小菱']
             l.append(tmp)
         pickle.dump(l, f)

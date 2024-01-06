@@ -5,6 +5,7 @@ import torch
 import pickle
 import numpy as np
 import librosa
+import torchaudio
 import scipy.io as sio
 import scipy.signal as signal
 import soundfile as sf
@@ -23,6 +24,7 @@ NOISE_PARTS_NUM = 20
 
 #
 SPEECH_KEY = 's'
+SPEECH_TARGET_CHANNEL = 's_c'
 KEY_WORDS_LEBEL = 'label_idx'
 CUSTOM_LABEL = 'custom_label'
 CUSTOM_LABEL_LEN = 'custom_label_len'
@@ -67,11 +69,11 @@ class CZDataset(Dataset):
 
     __metaclass__ = ABCMeta
 
-    def __init__(self, pin_yin_config_path, kws_wav_dir, bg_wav_dir, noise_path, rir_dir, p_noise_dir, sample_rate=16000, speech_seconds=15, mic_num=2):
+    def __init__(self, pin_yin_config_path, kws_wav_dir, bg_wav_dir, noise_path, rir_dir, p_noise_dir, sample_rate=16000, speech_seconds=15, position_num=2):
+        self.position_num = position_num
         self.pin_yin_config = self.parse_pin_yin_config(pin_yin_config_path)
         self.key_words_list = self.gen_kw_pickle_list(kws_wav_dir)
         self.bg_wav_list = self.gen_pickle_list(bg_wav_dir)
-        self.mic_num = mic_num
         self.road_noise_path_list = gen_target_file_list(noise_path, target_ext='.npy')
         self.noise_data_info = self._list_noise_and_snr(p_noise_dir)
         self.rir_list = self._gen_rir_list(rir_dir)
@@ -103,9 +105,14 @@ class CZDataset(Dataset):
             if isinstance(info, list):
                 tmp = []
                 for p in info:
+                    if isinstance(p, tuple):
+                        scale = p[1]
+                        p = p[0]
+                    else:
+                        scale = 1
                     with open(p, 'rb') as f:
                         key_tmp = pickle.load(f)
-                    tmp += key_tmp
+                    tmp += key_tmp * scale
             else:
                 with open(info, 'rb') as f:
                     tmp = pickle.load(f)
@@ -115,14 +122,16 @@ class CZDataset(Dataset):
 
     def _gen_rir_list(self, rir_dict):
         p_rir = []
-        for k, v in rir_dict.items():
+        for k, data in rir_dict.items():
+            v = data['rir']
+            channel = data['channel']
             rir_l = []
             if isinstance(v, list):
                 for path in v:
                     rir_l += gen_target_file_list(path)
             else:
                 rir_l += gen_target_file_list(v)
-            p_rir.append(rir_l)
+            p_rir.append((rir_l, int(channel)))
         return p_rir
     
     def _list_noise_and_snr(self, noise_path):
@@ -159,19 +168,6 @@ class CZDataset(Dataset):
     def __len__(self):
         return len(self.bg_wav_list) * 10000
 
-    def _set_zero(self, wav1):
-        rdm_times = random.randint(1, 3)
-        rdm_index_l = []
-        for _ in range(rdm_times):
-            rdm_index_l.append(random.randint(0, wav1.size - 16000))
-        start_index_l = sorted(rdm_index_l)
-        start_index_l.append(wav1.size)
-        for i in range(len(start_index_l) - 1):
-            start = start_index_l[i]
-            end = random.randint(start, start_index_l[i + 1])
-            wav1[start:end] = 0
-        return wav1
-
     def _read_road_noise(self):
         pass
 
@@ -182,19 +178,22 @@ class CZDataset(Dataset):
         return s_rir
 
     def _choice_rir(self, num_person):
-        position = random.sample(list(range(self.mic_num)), num_person)
+        position = random.sample(list(range(self.position_num)), num_person)
         rir_l = []
-        for i in range(self.mic_num):
-            rir_pad = np.zeros([3000, self.mic_num], dtype=np.float32)
+        channel_l = []
+        for i in range(self.position_num):
+            rir_pad = np.zeros([3000, self.position_num], dtype=np.float32)
+            channel = 0
             if i in position:
-                p_rir_l = self.rir_list[i]
+                p_rir_l, channel = self.rir_list[i]
                 sel_rir_path = p_rir_l[random.randint(0, len(p_rir_l) - 1)]
                 rir, fs = sf.read(sel_rir_path)
                 rir = rir / (np.max(np.abs(rir)) + 1e-4)
-                rir_pad[:min(3000, rir.shape[0]), :] = rir[:min(3000, rir.shape[0]), :self.mic_num]
+                rir_pad[:min(3000, rir.shape[0]), :rir.shape[1]] = rir[:min(3000, rir.shape[0]), :]
             rir_l.append(rir_pad.astype(np.float32).T)
-        rir = np.stack(rir_l, axis=-1)
-        return position, rir
+            channel_l.append(channel)
+        rir = np.stack(rir_l, axis=-1)[:rir.shape[1]]
+        return position, rir, np.array(channel_l, dtype=np.int64)
     
     def _read_point_noise(self, noise_len=None):
         if noise_len is None:
@@ -213,9 +212,10 @@ class CZDataset(Dataset):
         n = np.squeeze(n).astype(np.float32)
         return n
 
+
     def __getitem__(self, idx):
-        num_person = random.randint(1, self.mic_num)
-        position, rirs = self._choice_rir(num_person)
+        num_person = random.randint(1, self.position_num)
+        position, rirs, channel = self._choice_rir(num_person)
         s_l = []
         key_idx_l = []
         max_label_len = 0
@@ -224,11 +224,11 @@ class CZDataset(Dataset):
         real_frames_l = []
         label_frame_l = []
         is_has_key = False
-        for i in range(self.mic_num):
+        for i in range(self.position_num):
             if i in position:
                 if not is_has_key:
                     # if random.random() < (1 / (len(self.key_words_list) + 1)):
-                    if random.random() < 0.5 :
+                    if random.random() < 0.6 or i > 1:
                         is_key = False
                     else:
                         is_key = True
@@ -236,6 +236,7 @@ class CZDataset(Dataset):
                     is_key = False
                             
                 s_tmp, key_idx, label, real_frames, label_frame = self._get_long_wav(is_key=is_key)
+                
                 if key_idx > 0:
                     is_has_key = True
                 
@@ -263,7 +264,7 @@ class CZDataset(Dataset):
         
         # s_l_new = []
         label_l_new = []
-        for i in range(self.mic_num):
+        for i in range(self.position_num):
             # s_tmp = s_l[i]
             # s_l_new.append(np.pad(s_tmp, mode='constant', pad_width=[0, max_len - s_tmp.size], constant_values=[0, 0]))
             label_tmp = label_l[i]
@@ -276,10 +277,10 @@ class CZDataset(Dataset):
         real_frames = np.array(real_frames_l)
         label_frames = np.array(label_frame_l)
         
-        num_p_noise = random.randint(1, max(2, self.mic_num // 2 + 1))
-        p_position, p_rirs = self._choice_rir(num_p_noise)
+        num_p_noise = random.randint(1, max(2, self.position_num // 2 + 1))
+        p_position, p_rirs, _ = self._choice_rir(num_p_noise)
         n_l = []
-        for i in range(self.mic_num):
+        for i in range(self.position_num):
             if i in p_position:
                 p_n_tmp = self._read_point_noise(self.wav_len)
             else:
@@ -291,9 +292,10 @@ class CZDataset(Dataset):
         noise_start = random.randint(0, road_noise.shape[1] - 1 - s.shape[0])
         sel_noise = road_noise[:, noise_start:noise_start + s.shape[0]]
         np.random.shuffle(sel_noise)
-        sel_noise = sel_noise[:self.mic_num].T
+        sel_noise = sel_noise[:self.position_num]
         res_dict = {
             SPEECH_KEY: torch.from_numpy(s.astype(np.float32)),
+            SPEECH_TARGET_CHANNEL: torch.from_numpy(channel),
             NFRAMES_KEY: torch.from_numpy(real_frames.astype(np.int64)),
             LABEL_FRAMES_KEY: torch.from_numpy(label_frames.astype(np.int64)),
             KEY_WORDS_LEBEL: torch.from_numpy(key_idx.astype(np.int64)),
@@ -347,7 +349,11 @@ class CZDataset(Dataset):
                     data = librosa.resample(data, orig_sr=fs, target_sr=16000)
                 np.save(npy_path, data.astype(np.float16))
         else:
-            data, fs = sf.read(path)
+            try:
+                data, fs = sf.read(path)
+            except:
+                print(path)
+                return None, None, False, None
             if fs != 16000:
                 data = librosa.resample(data, orig_sr=fs, target_sr=16000)
             np.save(npy_path, data.astype(np.float16))
@@ -361,6 +367,15 @@ class CZDataset(Dataset):
                     return None, None, False, None
         else:
             label_frame = -1
+            if random.random() < 0.3:
+                # 变速
+                t = data.shape
+                sox_rate = random.uniform(0.9, 1.1)
+                s_tmp_tensor = torch.from_numpy(data.astype(np.float32)).reshape(1, -1)
+                data, _ = torchaudio.sox_effects.apply_effects_tensor(
+                    s_tmp_tensor, 16000, [['speed', str(sox_rate)], ['rate', str(16000)]]
+                    )
+                data = data.squeeze().cpu().numpy()
         label = self.pinyin2idx(info[2], info)
         return data, label, True, label_frame
 
@@ -379,7 +394,10 @@ class CZDataset(Dataset):
         if is_key:
             # key word
             while True:
-                idx = random.randint(0, len(self.key_words_list) - 1)
+                if random.random() < 0.5:
+                    idx = random.randint(0, len(self.key_words_list) - 1)
+                else:
+                    idx = 1
                 key_list = self.key_words_list[idx]
                 rdm_idx = random.randint(0, len(key_list) - 1)
                 bg_info = key_list[rdm_idx]
@@ -457,12 +475,16 @@ class GPUDataSimulate(nn.Module):
 
     def __call__(self, batch_info):
         with torch.no_grad():
-            s, n, p_n, s_rir, p_rir, label_idx, custom_label, custom_label_len, real_frames, label_frames = \
-                batch_info.s, batch_info.road_n, batch_info.p_n, batch_info.s_rir, batch_info.p_rir, batch_info.label_idx, batch_info.custom_label, batch_info.custom_label_len, batch_info.real_frames, batch_info.label_frames
-            mix, s, mix_no_inter = self.simulate_data(s, n, p_n, s_rir, p_rir)
-            enhance_data, _, _ = self.net(mix)
-            b, c, _ = enhance_data.size()
-            enhance_data = enhance_data + random.uniform(0.1, 0.3) * self.stft(s.reshape(b * c, -1)).reshape(b, c, -1)
+            s, n, p_n, s_rir, channel, p_rir, label_idx, custom_label, custom_label_len, real_frames, label_frames = \
+                batch_info.s, batch_info.road_n, batch_info.p_n, batch_info.s_rir, batch_info.channel, batch_info.p_rir, batch_info.label_idx, batch_info.custom_label, batch_info.custom_label_len, batch_info.real_frames, batch_info.label_frames
+            mix, s, mix_no_inter = self.simulate_data(s, n, p_n, s_rir, channel, p_rir)
+            s = s[:, :2]
+            enhance_data, _, _ = self.net(mix[:, :2])
+            b, c, t = enhance_data.size()
+            s = s[:, :, :t]
+            mix = mix[:, :, :t]
+            mix_no_inter = mix_no_inter[:, :, :t]
+            enhance_data = enhance_data #+ random.uniform(0.1, 0.3) * self.stft(s.reshape(b * c, -1)).reshape(b, c, -1)
             # 先用 clean 训练看
             # enhance_data = self.stft(s[:, 2:].reshape(b * c, -1)).reshape(b, c, -1)
             b, c, t = enhance_data.shape
@@ -479,7 +501,7 @@ class GPUDataSimulate(nn.Module):
                         rdm_rate = random.random()
                         if rdm_rate < 0.8:
                             enhance_l.append(enhance_data[i, 0])
-                        elif rdm_rate < 0.9:
+                        elif rdm_rate < 0.85:
                             enhance_l.append(mix_no_inter[i, 0])
                         elif rdm_rate < 0.95:
                             enhance_l.append(mix[i, 0])
@@ -493,11 +515,11 @@ class GPUDataSimulate(nn.Module):
                         custom_label_len_l.append(custom_label_len[i, 0])
                     if label_idx[i, 1].item() > 0:
                         rdm_rate = random.random()
-                        if rdm_rate < 0.5:
+                        if rdm_rate < 0.8:
                             enhance_l.append(enhance_data[i, 1])
-                        elif rdm_rate < 0.7:
+                        elif rdm_rate < 0.85:
                             enhance_l.append(mix_no_inter[i, 1])
-                        elif rdm_rate < 0.9:
+                        elif rdm_rate < 0.95:
                             enhance_l.append(mix[i, 1])
                         else:
                             enhance_l.append(s[i, 1])
@@ -509,11 +531,11 @@ class GPUDataSimulate(nn.Module):
                         custom_label_len_l.append(custom_label_len[i, 1])
                 else:
                     rdm_rate = random.random()
-                    if rdm_rate < 0.5:
+                    if rdm_rate < 0.8:
                         enhance_l.append(enhance_data[i, 0])
-                    elif rdm_rate < 0.7:
-                        enhance_l.append(mix_no_inter[i, 0])
                     elif rdm_rate < 0.9:
+                        enhance_l.append(mix_no_inter[i, 0])
+                    elif rdm_rate < 0.95:
                         enhance_l.append(mix[i, 0])
                     else:
                         enhance_l.append(s[i, 0])
@@ -525,11 +547,11 @@ class GPUDataSimulate(nn.Module):
                     custom_label_len_l.append(custom_label_len[i, 0])
                     
                     rdm_rate = random.random()
-                    if rdm_rate < 0.5:
+                    if rdm_rate < 0.8:
                         enhance_l.append(enhance_data[i, 1])
-                    elif rdm_rate < 0.7:
-                        enhance_l.append(mix_no_inter[i, 1])
                     elif rdm_rate < 0.9:
+                        enhance_l.append(mix_no_inter[i, 1])
+                    elif rdm_rate < 0.95:
                         enhance_l.append(mix[i, 1])
                     else:
                         enhance_l.append(s[i, 1])
@@ -599,29 +621,30 @@ class GPUDataSimulate(nn.Module):
 
 
     # @torch.compile
-    def simulate_data(self, s, n, p_n, s_rir, p_rir):
+    def simulate_data(self, s, n, p_n, s_rir, channel, p_rir):
         '''
         s: [B, T, num_mic]
         n: [B, T, num_mic]
         rir: [B, T1, num_mic, num_person]
         '''
-        with torch.no_grad():
+        with torch.no_grad():            
             s = s.to(self.device)
             n = n.to(self.device)
-            p_n = p_n.to(self.device)
-            s_rir = s_rir.to(self.device)            
+            p_n = p_n.to(self.device)            
+            s_rir = s_rir.to(self.device)  
+            channel = channel.to(self.device)          
             p_rir = p_rir.to(self.device) 
 
             s_rev_l = []
             p_rev_l = []
             s_tgt_l = []
             for i in range(s.size(-1)):
-                s[..., i] = self.simulate_freq_response(s[..., i])
-                n[..., i] = self.simulate_freq_response(n[..., i])
+                s[..., i] = self.set_zeros(self.simulate_freq_response(s[..., i]))
+                n[:, i] = self.simulate_freq_response(n[:, i])
                 p_n[..., i] = self.simulate_freq_response(p_n[..., i])
                 s_rev_tmp =  batch_rir_conv(s[..., i], s_rir[..., i])[..., :s.size(1)]
                 p_n_rev_tmp =  batch_rir_conv(p_n[..., i], p_rir[..., i])[..., :s.size(1)]
-                s_tgt_tmp = s_rev_tmp[:, i]
+                s_tgt_tmp = s_rev_tmp[torch.arange(s.size(0)), channel[:, i], :]
                 s_rev_l.append(s_rev_tmp)
                 s_tgt_l.append(s_tgt_tmp)
                 p_rev_l.append(p_n_rev_tmp)
@@ -647,14 +670,26 @@ class GPUDataSimulate(nn.Module):
                                         device=s.device)
             p_n_alpha = (s_mean / (1e-7 + p_n_mean * (10.0 ** (p_n_snr / 10.0)))).sqrt().unsqueeze(dim=-1).unsqueeze(dim=-1)
 
-            mix = s_rev + n.permute(0, 2, 1) * n_alpha + p_rev * p_n_alpha
-            mix_no_inter = s_tgt + n.permute(0, 2, 1) * n_alpha + p_rev * p_n_alpha
-            mix_amp = torch.rand(s_rev.size(0), 1, 1, device=s_rev.device).clamp_(0.1, 1.0)
-            alpha = 1 / (torch.amax(torch.abs(mix), [-1, -2], keepdim=True) + EPSILON) * mix_amp
+            mix = s_rev + n[:, :s_rir.size(1)] * n_alpha + p_rev * p_n_alpha
+            mix_no_inter = s_tgt[:, :s_rev.size(1)] + n[:, :s_rir.size(1)] * n_alpha + p_rev * p_n_alpha
+            mix_amp = torch.rand(s_rev.size(0), 1, 1, device=s_rev.device).clamp_(0.1, 1.0) 
+            alpha = 1 / (torch.amax(torch.abs(mix), [-1, -2], keepdim=True) + EPSILON)
+            alpha *= mix_amp
             mix_no_inter *= alpha
             mix *= alpha
             s_tgt *= alpha
             s_rev *= alpha
+            # for i in range(mix.size(0)):
+            #     if random.random() < 0.3:
+            #         mix[i] = mix[i] / (torch.amax(torch.abs(mix[i]), keepdim=True) + 1e-6)
+            #         amp = random.uniform(0.03, 0.7)
+            #         mix[i] = torch.clamp(mix[i], -amp,  amp)
+                    
+            #         mix_no_inter[i] = mix_no_inter[i] / (torch.amax(torch.abs(mix_no_inter[i]), keepdim=True) + 1e-6)
+            #         mix_no_inter[i] = torch.clamp(mix_no_inter[i], -amp,  amp)
+                    
+            #         s_tgt[i] = s_tgt[i] / (torch.amax(torch.abs(s_tgt[i]), keepdim=True) + 1e-6)
+            #         s_tgt[i] = torch.clamp(s_tgt[i], -amp,  amp)
             return mix, s_tgt, mix_no_inter
 
 
@@ -664,6 +699,7 @@ class SMBatchInfo(object):
     def __init__(self, batch_dict):
         super(SMBatchInfo, self).__init__()
         self.s = batch_dict[SPEECH_KEY] if SPEECH_KEY in batch_dict else None
+        self.channel = batch_dict[SPEECH_TARGET_CHANNEL] if SPEECH_TARGET_CHANNEL in batch_dict else None
         self.label_frames = batch_dict[LABEL_FRAMES_KEY] if LABEL_FRAMES_KEY in batch_dict else None
         self.real_frames = batch_dict[NFRAMES_KEY] if NFRAMES_KEY in batch_dict else None
         self.label_idx = batch_dict[KEY_WORDS_LEBEL] if KEY_WORDS_LEBEL in batch_dict else None
@@ -680,7 +716,7 @@ if __name__ == '__main__':
     dataset = CZDataset(PIN_YIN_CONFIG_PATH, TRAINING_KEY_WORDS, TRAINING_BACKGROUND, TRAINING_NOISE, TRAINING_RIR, POINT_NOISE_PATH,
                         sample_rate=16000, speech_seconds=10)
     batch_dataloader = BatchDataLoader(dataset, batch_size=4, workers_num=0)
-    car_zone_model_path = '/home/yanyongjie/code/official/car/car_zone_2_for_aodi_real/model/student_model/model-1200000--17.81806887626648.pickle'
+    car_zone_model_path = '/home/yanyongjie/code/official/car/car_zone_wuling_no_back_r4/model/model-302000--20.740382461547853.pickle'
     data_factory = GPUDataSimulate(TRAIN_FRQ_RESPONSE, ROAD_SNR_LIST, POINT_SNR_LIST, device='cpu', zone_model_path=car_zone_model_path)
     for batch_info in batch_dataloader:
         res = data_factory(batch_info)

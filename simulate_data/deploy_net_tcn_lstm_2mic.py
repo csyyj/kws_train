@@ -93,7 +93,7 @@ class NetCRNN(nn.Module):
     def __init__(self):
         super(NetCRNN, self).__init__()
 
-        self.layer_norm_in = nn.LayerNorm([5 * 2 * 2, 4]) # [5 * 2(mic) * 2 (ri), 4]
+        self.layer_norm = nn.LayerNorm([5 * 2 * 2, 8]) # [5 * 2(mic) * 2 (ri), 4]
 
         self.conv1 = SpeechConv(in_channels=20, out_channels=CHANNEL, kernel_size=(1, 3), stride=(1, 2),
                                 padding=(0, 1), out_ac=nn.PReLU(CHANNEL)) # 128
@@ -176,10 +176,10 @@ class NetCRNN(nn.Module):
             mix_spec = mix_spec.reshape(b, c, t, f, -1)
             in_spec = mix_spec.permute(0, 1, 4, 2, 3).reshape(b, -1, t, f)
             
-            pad_feat = F.pad(in_spec[:, :, :, 1:], [0, 0, 2, 2])
+            pad_feat = F.pad(in_spec[:, :, :, 1:], [0, 0, 0, 4])
             in_feat = torch.stack([pad_feat[:, :, :-4], pad_feat[:, :, 1:-3], pad_feat[:, :, 2:-2], pad_feat[:, :, 3:-1], pad_feat[:, :, 4:]], dim=1).reshape(b, 5 * 2 * 2, t, -1)
 
-        norm_feat = self.layer_norm_in(in_feat.reshape(b, 20, t, 64, 4).permute(0, 2, 3, 1, 4)).permute(0, 3, 1, 2, 4).reshape(b, 20, t, -1)
+        norm_feat = self.layer_norm(in_feat.reshape(b, 20, t, 32, 8).permute(0, 2, 3, 1, 4)).permute(0, 3, 1, 2, 4).reshape(b, 20, t, -1)
         e1 = self.conv1(norm_feat)
         e2 = self.conv2(e1)
         e3 = self.conv3(e2)

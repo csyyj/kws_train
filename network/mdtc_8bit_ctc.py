@@ -88,7 +88,7 @@ class Fbank(nn.Module):
         self.stft = STFT(filter_length, hop_length)
         self.alpha = nn.Parameter(torch.FloatTensor(1, 257))
         nn.init.constant_(self.alpha, 3)
-        self.ln_0 = nn.LayerNorm([5, 4])
+        self.ln_0 = nn.LayerNorm([10, 16])
         self.linear_to_mel_weight_matrix = torch.from_numpy(librosa.filters.mel(sr=sample_rate,
                                                                                 n_fft=filter_length,
                                                                                 n_mels=n_mels,
@@ -96,15 +96,35 @@ class Fbank(nn.Module):
                                                                                 fmax=8000,
                                                                                 htk=True,
                                                                                 norm=None).T.astype(np.float32))
-
+    def spec_aug(self, spec, num_t_mask=2, num_f_mask=3, max_t=3, max_f=5):
+        b, t, f, _ = spec.size()
+        for i in range(b):
+            if random.random() < 0.3:
+                for j in range(num_t_mask):
+                    start = random.randint(0, t - 1)
+                    length = random.randint(1, max_t)
+                    end = min(t, start + length)
+                    spec[i, start:end] = 0
+                
+                for j in range(num_f_mask):
+                    start = random.randint(0, f - 1)
+                    length = random.randint(1, max_f)
+                    end = min(f, start + end)
+                    spec[i, :, start:end] = 0
+        return spec
+    
+    
     def forward(self, input_waveform):
-        spec = self.stft.transform(input_waveform) # [b, 201, 897]
-        mag = (spec ** 2).sum(-1).sqrt()
-        PAD_LEN = 4
-        xs_pad = F.pad(mag, [0, 0, PAD_LEN, 0])
-        b, t, _ = mag.size()
-        xs_stack = torch.stack([xs_pad[:, i: i + t, 1:] for i in range(PAD_LEN + 1)], dim=2) # [B, T, 5, 64]
-        norm_xs = self.ln_0(xs_stack.reshape(b, t, PAD_LEN + 1, -1, 4).permute(0, 1, 3, 2, 4)).permute(0, 1, 3, 2, 4).reshape(b, t, 5, -1)[:, :, -1]
+        with torch.no_grad():
+            spec = self.stft.transform(input_waveform) # [b, 201, 897]
+            # if self.training:
+            #     spec = self.spec_aug(spec)
+            mag = (spec ** 2).sum(-1).sqrt()
+            PAD_LEN = 9
+            xs_pad = F.pad(mag, [0, 0, PAD_LEN, 0])
+            b, t, _ = mag.size()
+            xs_stack = torch.stack([xs_pad[:, i: i + t, 1:] for i in range(PAD_LEN + 1)], dim=2) # [B, T, 5, 64]
+        norm_xs = self.ln_0(xs_stack.reshape(b, t, PAD_LEN + 1, -1, 16).permute(0, 1, 3, 2, 4)).permute(0, 1, 3, 2, 4).reshape(b, t, 10, -1)[:, :, -1]
         norm_mag = F.pad(norm_xs, [1, 0])
         # if self.training and False:
         #     avg_mag = torch.cumsum(mag, dim=1) / (torch.arange(t).reshape(1, t, 1) + 1).to(input_waveform.device)
@@ -348,7 +368,6 @@ class MDTCSML(nn.Module):
             else:
                 hidden = [None for _ in range(self.stack_size * self.stack_num + 1)]
                 
-        
         xs = self.fbank(wav)
             
         b, t, f = xs.size()
@@ -378,7 +397,7 @@ class MDTCSML(nn.Module):
             outputs_cache_list += new_caches
 
         outputs = sum(outputs_list)
-        outputs_list_for_loss.append(outputs)
+        # outputs_list_for_loss.append(outputs)
         outputs = outputs.transpose(1, 2)
         outputs = self.drop_out(outputs)
         pinyin_logist = self.pinyin_fc(outputs)
@@ -392,7 +411,7 @@ class MDTCSML(nn.Module):
             l2_f_loss = self.l2_regularization_feature(outputs_list_for_loss)
             kws_loss, acc, vad_speech = self.max_pooling_loss_vad(logist, kw_target, clean_speech, ckw_len, real_frames, label_frames)
             ctc_loss = self.ctc(pinyin_logist, real_frames, ckw_target, ckw_len)
-            loss = kws_loss + l2_f_loss + l2_loss + ctc_loss
+            loss = kws_loss + l2_f_loss + l2_loss + 1 * ctc_loss
             acc2 = 0
         else:
             loss = None
@@ -423,7 +442,7 @@ class MDTCSML(nn.Module):
         clean_speech_vad = clean_speech.detach()
 
         loss = 0.0
-        non_keyword_weight = 1.0
+        non_keyword_weight = 4.0
         keyword_weight = 1.0 #len(TRAINING_KEY_WORDS) + 1
         for i in range(num_utts):
             # 唤醒词
