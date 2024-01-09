@@ -229,14 +229,14 @@ class CZDataset(Dataset):
             if i in position:
                 if not is_has_key:
                     # if random.random() < (1 / (len(self.key_words_list) + 1)):
-                    if random.random() < 0.5 or i > 1:
+                    if random.random() < 0.6 or i > 1:
                         is_key = False
                     else:
                         is_key = True
                 else:
                     is_key = False
                 
-                if random.random() < 0.96:
+                if random.random() < 0.95:
                     s_tmp, key_idx, label, real_frames, label_frame = self._get_long_wav(is_key=is_key)
                 else:
                     s_tmp, key_idx, label, real_frames, label_frame = self._get_error_kws_wav()
