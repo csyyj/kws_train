@@ -531,7 +531,7 @@ class MDTCSML(nn.Module):
         logits_softmax = torch.softmax(logits_ori, dim=-1)
         num_utts = logits_ori.size(0)
         with torch.no_grad():
-            max_logits, index = logits_softmax[:, :, 1:].max(1)
+            max_logits, index = logits_softmax[:, :, 1:2].max(1)
             num_correct = 0
             for i in range(num_utts):
                 max_p, idx = max_logits[i].max(0)
@@ -559,7 +559,7 @@ class MDTCSML(nn.Module):
                     # min_prob, _ = torch.min(prob, dim=0)
                     loss += (-min_prob) * non_keyword_weight
                 # 查看醒词类别
-                prob = logits[i, :, 1:]
+                prob = logits[i, :, 1:2]
                 max_prob = torch.amax(prob)
                 loss += max_prob * non_keyword_weight
             else:
