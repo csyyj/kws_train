@@ -69,7 +69,8 @@ class CZDataset(Dataset):
 
     __metaclass__ = ABCMeta
 
-    def __init__(self, pin_yin_config_path, kws_wav_dir, bg_wav_dir, noise_path, rir_dir, p_noise_dir, sample_rate=16000, speech_seconds=15, position_num=2):
+    def __init__(self, pin_yin_config_path, kws_wav_dir, bg_wav_dir, noise_path, rir_dir, p_noise_dir, error_kws_dir, sample_rate=16000, speech_seconds=15, position_num=2):
+        self.error_kws_list = gen_target_file_list(error_kws_dir)
         self.position_num = position_num
         self.pin_yin_config = self.parse_pin_yin_config(pin_yin_config_path)
         self.key_words_list = self.gen_kw_pickle_list(kws_wav_dir)
@@ -228,14 +229,17 @@ class CZDataset(Dataset):
             if i in position:
                 if not is_has_key:
                     # if random.random() < (1 / (len(self.key_words_list) + 1)):
-                    if random.random() < 0.6 or i > 1:
+                    if random.random() < 0.5 or i > 1:
                         is_key = False
                     else:
                         is_key = True
                 else:
                     is_key = False
-                            
-                s_tmp, key_idx, label, real_frames, label_frame = self._get_long_wav(is_key=is_key)
+                
+                if random.random() < 0.96:
+                    s_tmp, key_idx, label, real_frames, label_frame = self._get_long_wav(is_key=is_key)
+                else:
+                    s_tmp, key_idx, label, real_frames, label_frame = self._get_error_kws_wav()
                 
                 if key_idx > 0:
                     is_has_key = True
@@ -268,7 +272,7 @@ class CZDataset(Dataset):
             # s_tmp = s_l[i]
             # s_l_new.append(np.pad(s_tmp, mode='constant', pad_width=[0, max_len - s_tmp.size], constant_values=[0, 0]))
             label_tmp = label_l[i]
-            label_l_new.append(np.pad(label_tmp, mode='constant', pad_width=[0, max_label_len - label_tmp.size], constant_values=[-1, -1]))
+            label_l_new.append(np.pad(label_tmp, mode='constant', pad_width=[0, max_label_len - label_tmp.size], constant_values=[0, 0]))
         
         s = np.stack(s_l, axis=1)
         label = np.stack(label_l_new, axis=1)
@@ -394,10 +398,11 @@ class CZDataset(Dataset):
         if is_key:
             # key word
             while True:
-                if random.random() < 0.5:
-                    idx = random.randint(0, len(self.key_words_list) - 1)
-                else:
-                    idx = 1
+                idx = random.randint(0, len(self.key_words_list) - 1)
+                # if random.random() < 0.3:
+                #     idx = random.randint(0, len(self.key_words_list) - 1)
+                # else:
+                #     idx = 1
                 key_list = self.key_words_list[idx]
                 rdm_idx = random.randint(0, len(key_list) - 1)
                 bg_info = key_list[rdm_idx]
@@ -427,6 +432,21 @@ class CZDataset(Dataset):
         real_frames = wav.shape[0] // 256
         wav = np.concatenate([wav, np.zeros([self.wav_len - wav.shape[0]], dtype=np.float64)], axis=-1)
         return wav.astype(np.float32), idx, label, real_frames, label_frame
+    
+    def _get_error_kws_wav(self):
+        while True:
+            error_kws_path = self.error_kws_list[random.randint(0, len(self.error_kws_list) - 1)]
+            wav, _ = sf.read(error_kws_path)
+            if wav.shape[0] > 16000:
+                break
+        idx = 0
+        label = np.array([-1], np.int64)
+        real_frames = wav.shape[0] // 256
+        wav = np.concatenate([wav, np.zeros([self.wav_len - wav.shape[0]], dtype=np.float64)], axis=-1)
+        label_frame = -1
+        return wav.astype(np.float32), idx, label, real_frames, label_frame
+        
+        
 
 
 class BatchDataLoader(DataLoader):

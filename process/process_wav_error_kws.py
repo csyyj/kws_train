@@ -5,12 +5,7 @@ from train.train_script_1mic import *
 from tools.stft_istft import *
 
 MIX_WAV_FILE_PATH = './process/wuling'
-#MIX_WAV_FILE_PATH = './process/test_wav'
-MIX_WAV_FILE_PATH = './process/background'
-#MIX_WAV_FILE_PATH = './process/sow_new'
-#MIX_WAV_FILE_PATH = './process/sow'
-#MIX_WAV_FILE_PATH = './process/tmp'
-#MIX_WAV_FILE_PATH = './process/test_error_kws'
+MIX_WAV_FILE_PATH = './process/out'
 PROCESS_EXT = 'elevoc_process'
 THRES_HOLD = 0.5
 
@@ -40,12 +35,15 @@ if __name__ == '__main__':
         if '._' in f_path or PROCESS_EXT in f_path:
             continue
         mix, f = sf.read(f_path)
+        split_path = os.path.split(f_path)
+        cur_path = '/home/yanyongjie/code/official/kws/wuling/nhxl/process/test_error_kws'
+        cur_file_name = split_path[1]
         if len(mix.shape) == 1:
             mix = np.reshape(mix, [-1, 1])
         est_kws_l = []
         count_l = []
-        for i in range(mix.shape[1]):
-            mix_c = torch.from_numpy(mix[:, i].astype(np.float32))
+        for c in range(mix.shape[1]):
+            mix_c = torch.from_numpy(mix[:, c].astype(np.float32))
             with torch.no_grad():
                 mix_c = mix_c.unsqueeze(dim=0).to('cuda:0')
                 t = mix_c.size(-1)
@@ -71,9 +69,13 @@ if __name__ == '__main__':
                 k = 0
                 while k < est_logist.size(0):
                     if est_logist[k] > THRES_HOLD:# and est_pinyin_logist[k - 10:k+10, 179].amax() > 0.3:
-                        est_kws[:, k * 256] = 0.1 * (max_idx[k] + 1)
-                        k += 40
+                        est_kws[:, k * 256] = 0.1 * (max_idx[k] + 1)                        
                         count += 1
+                        print(est_logist[k:k+10])
+                        error_kws_wav = mix_c[:, max((k - 560) * 256, 0):min((k + 25)* 256, mix_c.size(1))].squeeze().detach().cpu().numpy()
+                        save_path = os.path.join(cur_path, '{}_{}_{}.wav'.format(cur_file_name.replace('.wav', ''), c, count))
+                        sf.write(save_path, error_kws_wav, 16000)
+                        k += 20
                     else:
                         k += 1
                 count_l.append(count)

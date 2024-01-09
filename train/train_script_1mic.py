@@ -45,7 +45,7 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
             print('set rank 0')
         set_seed(int(datetime.now().timestamp()) + rank * 10)        
         dataset = CZDataset(PIN_YIN_CONFIG_PATH, TRAINING_KEY_WORDS, TRAINING_BACKGROUND, TRAINING_NOISE, TRAINING_RIR, POINT_NOISE_PATH,
-                        sample_rate=16000, speech_seconds=10)
+                        error_kws_dir=ERROR_KWS_DIR, sample_rate=16000, speech_seconds=10)
         batch_dataloader = BatchDataLoader(dataset, batch_size=BATCH_SIZE, workers_num=8)
         net_work, batch_dataloader, data_factory = accelerator.prepare(net_work, batch_dataloader, data_factory)
     # optim = torch.optim.Adam(filter(lambda p: p.requires_grad, net_work.parameters()), lr=LR)
