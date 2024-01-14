@@ -6,10 +6,10 @@ from tools.stft_istft import *
 
 MIX_WAV_FILE_PATH = './process/wuling'
 #MIX_WAV_FILE_PATH = './process/test_wav'
-MIX_WAV_FILE_PATH = './process/background'
+#MIX_WAV_FILE_PATH = './process/background'
 #MIX_WAV_FILE_PATH = './process/sow_new'
-#MIX_WAV_FILE_PATH = './process/sow'
-#MIX_WAV_FILE_PATH = './process/tmp'
+MIX_WAV_FILE_PATH = './process/sow'
+#MIX_WAV_FILE_PATH = './process/0112'
 #MIX_WAV_FILE_PATH = './process/test_error_kws'
 PROCESS_EXT = 'elevoc_process'
 THRES_HOLD = 0.5
@@ -64,7 +64,7 @@ if __name__ == '__main__':
                     est_pinyin = torch.cat(ll, dim=1)
                 else:
                     est, est_pinyin, _, _, _, _, _ = net_work(mix_c)
-                est_logist, max_idx = (torch.softmax(est, dim=-1).squeeze()[:, 1:2]).max(1)
+                est_logist, max_idx = (torch.softmax(est, dim=-1).squeeze()[:, 1:5]).max(1)
                 est_pinyin_logist = torch.softmax(est_pinyin, dim=-1).squeeze()
                 est_kws = torch.zeros_like(mix_c)
                 count = 0

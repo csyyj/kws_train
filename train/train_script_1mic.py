@@ -55,7 +55,7 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
     step = 0
     if RESUME_MODEL:
         step, optim_dict = resume_model(net_work, MODEL_DIR, MODEL_NAME if model_name is None else model_name, device=device)
-        optim.load_state_dict(optim_dict)
+        # optim.load_state_dict(optim_dict)
     
     if is_need_dataloader:
         if rank == 0 and is_need_dataloader:

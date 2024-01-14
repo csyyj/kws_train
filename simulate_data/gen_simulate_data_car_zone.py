@@ -399,10 +399,10 @@ class CZDataset(Dataset):
             # key word
             while True:
                 idx = random.randint(0, len(self.key_words_list) - 1)
-                # if random.random() < 0.3:
+                # if random.random() < 0.5:
                 #     idx = random.randint(0, len(self.key_words_list) - 1)
                 # else:
-                #     idx = 1
+                #     idx = 0
                 key_list = self.key_words_list[idx]
                 rdm_idx = random.randint(0, len(key_list) - 1)
                 bg_info = key_list[rdm_idx]
@@ -497,7 +497,8 @@ class GPUDataSimulate(nn.Module):
         with torch.no_grad():
             s, n, p_n, s_rir, channel, p_rir, label_idx, custom_label, custom_label_len, real_frames, label_frames = \
                 batch_info.s, batch_info.road_n, batch_info.p_n, batch_info.s_rir, batch_info.channel, batch_info.p_rir, batch_info.label_idx, batch_info.custom_label, batch_info.custom_label_len, batch_info.real_frames, batch_info.label_frames
-            mix, s, mix_no_inter = self.simulate_data(s, n, p_n, s_rir, channel, p_rir)
+            mix, s, mix_no_inter, label_idx, custom_label, custom_label_len, real_frames, label_frames = \
+                self.simulate_data(s, n, p_n, s_rir, channel, p_rir, label_idx, custom_label, custom_label_len, real_frames, label_frames)
             s = s[:, :2]
             enhance_data, _, _ = self.net(mix[:, :2])
             b, c, t = enhance_data.size()
@@ -519,11 +520,11 @@ class GPUDataSimulate(nn.Module):
                 if label_idx[i].sum().item() > 0:
                     if label_idx[i, 0].item() > 0:
                         rdm_rate = random.random()
-                        if rdm_rate < 0.8:
+                        if rdm_rate < 0.7:
                             enhance_l.append(enhance_data[i, 0])
-                        elif rdm_rate < 0.85:
+                        elif rdm_rate < 0.8:
                             enhance_l.append(mix_no_inter[i, 0])
-                        elif rdm_rate < 0.95:
+                        elif rdm_rate < 0.85:
                             enhance_l.append(mix[i, 0])
                         else:
                             enhance_l.append(s[i, 0])
@@ -535,11 +536,11 @@ class GPUDataSimulate(nn.Module):
                         custom_label_len_l.append(custom_label_len[i, 0])
                     if label_idx[i, 1].item() > 0:
                         rdm_rate = random.random()
-                        if rdm_rate < 0.8:
+                        if rdm_rate < 0.7:
                             enhance_l.append(enhance_data[i, 1])
-                        elif rdm_rate < 0.85:
+                        elif rdm_rate < 0.8:
                             enhance_l.append(mix_no_inter[i, 1])
-                        elif rdm_rate < 0.95:
+                        elif rdm_rate < 0.85:
                             enhance_l.append(mix[i, 1])
                         else:
                             enhance_l.append(s[i, 1])
@@ -551,11 +552,11 @@ class GPUDataSimulate(nn.Module):
                         custom_label_len_l.append(custom_label_len[i, 1])
                 else:
                     rdm_rate = random.random()
-                    if rdm_rate < 0.8:
+                    if rdm_rate < 0.7:
                         enhance_l.append(enhance_data[i, 0])
-                    elif rdm_rate < 0.9:
+                    elif rdm_rate < 0.8:
                         enhance_l.append(mix_no_inter[i, 0])
-                    elif rdm_rate < 0.95:
+                    elif rdm_rate < 0.85:
                         enhance_l.append(mix[i, 0])
                     else:
                         enhance_l.append(s[i, 0])
@@ -567,11 +568,11 @@ class GPUDataSimulate(nn.Module):
                     custom_label_len_l.append(custom_label_len[i, 0])
                     
                     rdm_rate = random.random()
-                    if rdm_rate < 0.8:
+                    if rdm_rate < 0.7:
                         enhance_l.append(enhance_data[i, 1])
-                    elif rdm_rate < 0.9:
+                    elif rdm_rate < 0.8:
                         enhance_l.append(mix_no_inter[i, 1])
-                    elif rdm_rate < 0.95:
+                    elif rdm_rate < 0.85:
                         enhance_l.append(mix[i, 1])
                     else:
                         enhance_l.append(s[i, 1])
@@ -641,7 +642,7 @@ class GPUDataSimulate(nn.Module):
 
 
     # @torch.compile
-    def simulate_data(self, s, n, p_n, s_rir, channel, p_rir):
+    def simulate_data(self, s, n, p_n, s_rir, channel, p_rir, label_idx, custom_label, custom_label_len, real_frames, label_frames):
         '''
         s: [B, T, num_mic]
         n: [B, T, num_mic]
@@ -689,6 +690,15 @@ class GPUDataSimulate(nn.Module):
             p_n_snr = torch.randint(self.point_snr_list[0], self.point_snr_list[-1], (s_mean.size(0),), dtype=s.dtype,
                                         device=s.device)
             p_n_alpha = (s_mean / (1e-7 + p_n_mean * (10.0 ** (p_n_snr / 10.0)))).sqrt().unsqueeze(dim=-1).unsqueeze(dim=-1)
+            
+            for i in range(s_rev.size(1)):
+                #label_idx, custom_label, custom_label_len, real_frames, label_frames
+                if random.random() < 0.3:
+                    s_rev[i] = 0
+                    s_tgt[i] = 0
+                    label_idx[i] = 0
+                    custom_label[i] = -1
+                    label_frames[i] = -1
 
             mix = s_rev + n[:, :s_rir.size(1)] * n_alpha + p_rev * p_n_alpha
             mix_no_inter = s_tgt[:, :s_rev.size(1)] + n[:, :s_rir.size(1)] * n_alpha + p_rev * p_n_alpha
@@ -710,7 +720,7 @@ class GPUDataSimulate(nn.Module):
                     
             #         s_tgt[i] = s_tgt[i] / (torch.amax(torch.abs(s_tgt[i]), keepdim=True) + 1e-6)
             #         s_tgt[i] = torch.clamp(s_tgt[i], -amp,  amp)
-            return mix, s_tgt, mix_no_inter
+            return mix, s_tgt, mix_no_inter, label_idx, custom_label, custom_label_len, real_frames, label_frames
 
 
 

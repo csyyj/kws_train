@@ -88,7 +88,7 @@ class Fbank(nn.Module):
         self.stft = STFT(filter_length, hop_length)
         self.alpha = nn.Parameter(torch.FloatTensor(1, 257))
         nn.init.constant_(self.alpha, 3)
-        self.ln_0 = nn.LayerNorm([10, 16])
+        # self.ln = nn.LayerNorm([5, 16])
         self.linear_to_mel_weight_matrix = torch.from_numpy(librosa.filters.mel(sr=sample_rate,
                                                                                 n_fft=filter_length,
                                                                                 n_mels=n_mels,
@@ -120,12 +120,12 @@ class Fbank(nn.Module):
             # if self.training:
             #     spec = self.spec_aug(spec)
             mag = (spec ** 2).sum(-1).sqrt()
-            PAD_LEN = 9
-            xs_pad = F.pad(mag, [0, 0, PAD_LEN, 0])
-            b, t, _ = mag.size()
-            xs_stack = torch.stack([xs_pad[:, i: i + t, 1:] for i in range(PAD_LEN + 1)], dim=2) # [B, T, 5, 64]
-        norm_xs = self.ln_0(xs_stack.reshape(b, t, PAD_LEN + 1, -1, 16).permute(0, 1, 3, 2, 4)).permute(0, 1, 3, 2, 4).reshape(b, t, 10, -1)[:, :, -1]
-        norm_mag = F.pad(norm_xs, [1, 0])
+            # PAD_LEN = 4
+            # xs_pad = F.pad(mag, [0, 0, PAD_LEN, 0])
+            # b, t, _ = mag.size()
+            # xs_stack = torch.stack([xs_pad[:, i: i + t, 1:] for i in range(PAD_LEN + 1)], dim=2) # [B, T, 5, 64]
+        # norm_xs = self.ln(xs_stack.reshape(b, t, PAD_LEN + 1, -1, 16).permute(0, 1, 3, 2, 4)).permute(0, 1, 3, 2, 4).reshape(b, t, PAD_LEN + 1, -1)[:, :, -1]
+        # norm_mag = F.pad(norm_xs, [1, 0])
         # if self.training and False:
         #     avg_mag = torch.cumsum(mag, dim=1) / (torch.arange(t).reshape(1, t, 1) + 1).to(input_waveform.device)
         # else:
@@ -138,11 +138,11 @@ class Fbank(nn.Module):
         #     avg_mag = torch.stack(l, dim=1)
                     
         # norm_mag = mag / (avg_mag + 1e-8)
-        abs_mel = torch.matmul(norm_mag, self.linear_to_mel_weight_matrix.to(input_waveform.device))
-        # abs_mel = abs_mel + 1e-6
-        # log_mel = abs_mel.log()
-        # log_mel[log_mel < -6] = -6
-        return abs_mel
+        abs_mel = torch.matmul(mag, self.linear_to_mel_weight_matrix.to(input_waveform.device))
+        abs_mel = abs_mel + 1e-6
+        log_mel = abs_mel.log()
+        log_mel[log_mel < -6] = -6
+        return log_mel
 
 
 
@@ -399,8 +399,8 @@ class MDTCSML(nn.Module):
         outputs = sum(outputs_list)
         # outputs_list_for_loss.append(outputs)
         outputs = outputs.transpose(1, 2)
-        outputs = self.drop_out(outputs)
-        pinyin_logist = self.pinyin_fc(outputs)
+        # outputs = self.drop_out(outputs)
+        pinyin_logist = self.pinyin_fc(outputs_list[1].transpose(1, 2))
         # outputs_list_for_loss.append(pinyin_logist)
         logist = self.class_out(torch.cat([outputs, pinyin_logist], dim=-1))
         # outputs_list_for_loss.append(logist)
@@ -413,7 +413,7 @@ class MDTCSML(nn.Module):
             loss = 0
             for i in range(b):
                 if ckw_target[i, 0] >= 0:
-                    loss += self.ctc(pinyin_logist[i:i+1], real_frames[i:i+1], ckw_target[i:i+1], ckw_len[i:i+1])
+                    loss += 0.01 * self.ctc(pinyin_logist[i:i+1], real_frames[i:i+1], ckw_target[i:i+1], ckw_len[i:i+1])
             #ctc_loss = self.ctc(pinyin_logist, real_frames, ckw_target, ckw_len)
             loss += kws_loss + l2_f_loss + l2_loss #+ 0 * ctc_loss
             acc2 = 0
@@ -531,7 +531,7 @@ class MDTCSML(nn.Module):
         logits_softmax = torch.softmax(logits_ori, dim=-1)
         num_utts = logits_ori.size(0)
         with torch.no_grad():
-            max_logits, index = logits_softmax[:, :, 1:2].max(1)
+            max_logits, index = logits_softmax[:, :, 1:5].max(1)
             num_correct = 0
             for i in range(num_utts):
                 max_p, idx = max_logits[i].max(0)
@@ -552,14 +552,14 @@ class MDTCSML(nn.Module):
             # 唤醒词
             if target[i] == 0:
                 # 非唤醒词
-                if acc > acc_threshod:
-                    # 该惩罚项在早期启用会导致不收敛，输出全为background
-                    prob = logits[i, :, 0]
-                    min_prob = prob.sum()
-                    # min_prob, _ = torch.min(prob, dim=0)
-                    loss += (-min_prob) * non_keyword_weight
+                # if acc > acc_threshod:
+                #     # 该惩罚项在早期启用会导致不收敛，输出全为background
+                #     prob = logits[i, :, 0]
+                #     min_prob = prob.sum()
+                #     # min_prob, _ = torch.min(prob, dim=0)
+                #     loss += (-min_prob) * non_keyword_weight
                 # 查看醒词类别
-                prob = logits[i, :, 1:2]
+                prob = logits[i, :, 1:5]
                 max_prob = torch.amax(prob)
                 loss += max_prob * non_keyword_weight
             else:
@@ -572,11 +572,11 @@ class MDTCSML(nn.Module):
                 else:
                     if start_f[i] < 10 or last_f[i] > real_frames[i] - 10:
                         start = 10
-                        end = real_frames[i] - 10
+                        end = real_frames[i]
                     else:
                         if ckw_len[i] <= 5: # 非oneeshot
                             start = (start_f[i] + last_f[i]) // 2 + 3
-                            end = min(last_f[i] + 10, real_frames[i] - 10)
+                            end = min(last_f[i] + 10, real_frames[i])
                             # if last_f[i] + 5 > real_frames[i] - 10: # vad 有问题了，降级
                             #     start = 10
                             #     end = real_frames[i] - 10
@@ -588,7 +588,7 @@ class MDTCSML(nn.Module):
                             end = min(last_f[i] - 20, real_frames[i] - 20)
                     if start >= end:
                         start = 10
-                        end = real_frames[i] - 10
+                        end = real_frames[i]
                     clean_speech_vad[i, :start] = 0
                     clean_speech_vad[i, end:] = 0
                 prob1 = prob[start: end]
@@ -607,12 +607,12 @@ class MDTCSML(nn.Module):
                     # loss += -max_prob * keyword_weight
                     
                 # other 
-                # if acc > acc_threshod:
+                if acc > acc_threshod:
                 #     # 该惩罚项在早期启用会导致不收敛，输出全为background
-                #     prob_other = torch.cat([logits[i, :, target[i] + 1:], logits[i, :, 1:target[i]]], dim=-1)
-                #     if prob_other.size(-1) > 0:
-                #         max_prob_other = torch.amax(prob_other)
-                #         loss += max_prob_other * keyword_weight
+                    prob_other = torch.cat([logits[i, :, target[i] + 1:5], logits[i, :, 1:target[i]]], dim=-1)
+                    if prob_other.size(-1) > 0:
+                        max_prob_other = torch.amax(prob_other)
+                        loss += max_prob_other * keyword_weight
 
         loss = loss / num_utts
         # Compute accuracy of current batch
