@@ -20,5 +20,5 @@ def convert_model(ori_path, dest_path):
         dest_path)
 
 if __name__ == '__main__':
-    convert_model('/home/yanyongjie/code/official/kws/wuling/nhxl/model/student_model/model-2160000-852.655908203125.pickle',
-                  '/home/yanyongjie/code/official/kws/wuling/nhxl/conver.pickle')
+    convert_model('/home/yanyongjie/code/official/kws/wuling/nhxl/model/student_model/model-2542500--21.871500091552733.pickle',
+                  '/home/yanyongjie/code/official/kws/wuling/nhxl/convert.pickle')

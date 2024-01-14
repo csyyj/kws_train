@@ -559,7 +559,7 @@ class MDTCSML(nn.Module):
                 #     # min_prob, _ = torch.min(prob, dim=0)
                 #     loss += (-min_prob) * non_keyword_weight
                 # 查看醒词类别
-                prob = logits[i, :, 1:5]
+                prob = logits[i, :, 1:2]
                 max_prob = torch.amax(prob)
                 loss += max_prob * non_keyword_weight
             else:
