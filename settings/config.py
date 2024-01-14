@@ -133,19 +133,19 @@ TRAINING_KEY_WORDS = [
                      
                      ('/mnt/raid2/user_space/yanyongjie/asr/kws_words/enhance_data/nhxl/你好小菱.pickle', 10),
                      ],
-                     # [
-                     # '/mnt/raid2/user_space/yanyongjie/asr/pickle/HSJ/你好小五.pickle',
-                     # '/mnt/raid2/user_space/yanyongjie/asr/pickle/你好小五.pickle',
-                     # '/mnt/raid2/user_space/yanyongjie/asr/pickle/你好小五今天天气.pickle',
-                     # '/mnt/raid2/user_space/yanyongjie/asr/pickle/你好小五我要听歌.pickle',
-                     # '/mnt/raid2/user_space/yanyongjie/asr/pickle/你好小五导航回家.pickle',
+                     [
+                     '/mnt/raid2/user_space/yanyongjie/asr/pickle/HSJ/你好小五.pickle',
+                     '/mnt/raid2/user_space/yanyongjie/asr/pickle/你好小五.pickle',
+                     '/mnt/raid2/user_space/yanyongjie/asr/pickle/你好小五今天天气.pickle',
+                     '/mnt/raid2/user_space/yanyongjie/asr/pickle/你好小五我要听歌.pickle',
+                     '/mnt/raid2/user_space/yanyongjie/asr/pickle/你好小五导航回家.pickle',
                      
-                     # ('/mnt/raid2/user_space/yanyongjie/asr/real_pickle/你好小五.pickle', 10),
-                     # ('/mnt/raid2/user_space/yanyongjie/asr/real_pickle/你好小五今天天气.pickle', 10),
-                     # ('/mnt/raid2/user_space/yanyongjie/asr/real_pickle/你好小五我要听歌.pickle', 10),
+                     ('/mnt/raid2/user_space/yanyongjie/asr/real_pickle/你好小五.pickle', 10),
+                     ('/mnt/raid2/user_space/yanyongjie/asr/real_pickle/你好小五今天天气.pickle', 10),
+                     ('/mnt/raid2/user_space/yanyongjie/asr/real_pickle/你好小五我要听歌.pickle', 10),
                      
-                     # ('/mnt/raid2/user_space/yanyongjie/asr/kws_words/enhance_data/nhxw/你好小五.pickle', 10),
-                     # ],
+                     ('/mnt/raid2/user_space/yanyongjie/asr/kws_words/enhance_data/nhxw/你好小五.pickle', 10),
+                     ],
                      # [
                      # '/mnt/raid2/user_space/yanyongjie/asr/pickle/HSJ/小五小五.pickle',
                      # '/mnt/raid2/user_space/yanyongjie/asr/pickle/小五小五.pickle',
@@ -201,7 +201,7 @@ TRAINING_CHECK_PATH = './check'
 ROAD_SNR_LIST = [-5, -2, -1, 0, 1, 2, 5]
 POINT_SNR_LIST = [2, 3, 5, 10]
 
-BATCH_SIZE = 24
+BATCH_SIZE = 48
 LR = 1e-5
 
 RESUME_MODEL = True 

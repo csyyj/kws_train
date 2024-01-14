@@ -399,10 +399,10 @@ class CZDataset(Dataset):
             # key word
             while True:
                 idx = random.randint(0, len(self.key_words_list) - 1)
-                # if random.random() < 0.5:
-                #     idx = random.randint(0, len(self.key_words_list) - 1)
-                # else:
-                #     idx = 0
+                if random.random() < 0.5:
+                    idx = random.randint(0, len(self.key_words_list) - 1)
+                else:
+                    idx = 0
                 key_list = self.key_words_list[idx]
                 rdm_idx = random.randint(0, len(key_list) - 1)
                 bg_info = key_list[rdm_idx]
