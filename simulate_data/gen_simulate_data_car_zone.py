@@ -660,7 +660,7 @@ class GPUDataSimulate(nn.Module):
             p_rev_l = []
             s_tgt_l = []
             for i in range(s.size(-1)):
-                s[..., i] = self.set_zeros(self.simulate_freq_response(s[..., i]))
+                s[..., i] = self.simulate_freq_response(s[..., i])
                 n[:, i] = self.simulate_freq_response(n[:, i])
                 p_n[..., i] = self.simulate_freq_response(p_n[..., i])
                 s_rev_tmp =  batch_rir_conv(s[..., i], s_rir[..., i])[..., :s.size(1)]
