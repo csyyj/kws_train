@@ -413,7 +413,7 @@ class MDTCSML(nn.Module):
             loss = 0
             for i in range(b):
                 if ckw_target[i, 0] >= 0:
-                    loss += 0.01 * self.ctc(pinyin_logist[i:i+1], real_frames[i:i+1], ckw_target[i:i+1], ckw_len[i:i+1])
+                    loss += 0.1 * self.ctc(pinyin_logist[i:i+1], real_frames[i:i+1], ckw_target[i:i+1], ckw_len[i:i+1])
             #ctc_loss = self.ctc(pinyin_logist, real_frames, ckw_target, ckw_len)
             loss += kws_loss + l2_f_loss + l2_loss #+ 0 * ctc_loss
             acc2 = 0

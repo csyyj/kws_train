@@ -236,7 +236,7 @@ class CZDataset(Dataset):
                 else:
                     is_key = False
                 
-                if random.random() < 0.95:
+                if random.random() < 0.90:
                     s_tmp, key_idx, label, real_frames, label_frame = self._get_long_wav(is_key=is_key)
                 else:
                     s_tmp, key_idx, label, real_frames, label_frame = self._get_error_kws_wav()
