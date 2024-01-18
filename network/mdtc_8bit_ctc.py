@@ -576,7 +576,7 @@ class MDTCSML(nn.Module):
                     else:
                         if ckw_len[i] <= 5: # 非oneeshot
                             start = (start_f[i] + last_f[i]) // 2 + 3
-                            end = min(last_f[i] + 10, real_frames[i])
+                            end = min(last_f[i], real_frames[i])
                             # if last_f[i] + 5 > real_frames[i] - 10: # vad 有问题了，降级
                             #     start = 10
                             #     end = real_frames[i] - 10

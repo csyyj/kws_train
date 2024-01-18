@@ -5,7 +5,7 @@ from train.train_script_1mic import *
 from tools.stft_istft import *
 
 MIX_WAV_FILE_PATH = './process/wuling'
-MIX_WAV_FILE_PATH = '/home/yanyongjie/code/official/kws/wuling/nhxl/process/error_kws'
+MIX_WAV_FILE_PATH = '/home/yanyongjie/code/official/kws/wuling/nhxl/process/error_kws_0117'
 PROCESS_EXT = 'elevoc_process'
 THRES_HOLD = 0.5
 
@@ -74,7 +74,7 @@ if __name__ == '__main__':
                         print(est_logist[k:k+10])
                         error_kws_wav = mix_c[:, max((k - 560) * 256, 0):min((k + 25)* 256, mix_c.size(1))].squeeze().detach().cpu().numpy()
                         save_path = os.path.join(cur_path, '{}_{}_{}_{}.wav'.format(cur_file_name.replace('.wav', ''), c, count, k))
-                        sf.write(save_path, error_kws_wav, 16000)
+                        #sf.write(save_path, error_kws_wav, 16000)
                         k += 20
                     else:
                         k += 1
