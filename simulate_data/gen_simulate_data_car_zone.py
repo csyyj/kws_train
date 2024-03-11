@@ -229,7 +229,7 @@ class CZDataset(Dataset):
             if i in position:
                 if not is_has_key:
                     # if random.random() < (1 / (len(self.key_words_list) + 1)):
-                    if random.random() < 0.6 or i > 1:
+                    if random.random() < 0.90 or i > 1:
                         is_key = False
                     else:
                         is_key = True

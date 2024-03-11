@@ -139,3 +139,4 @@ pretrained_models/
 simulate_data/rir_2
 simulate_data/rir_2_2
 *.DS_Store
+*.tar
