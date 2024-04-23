@@ -19,7 +19,7 @@ from simulate_data.gen_simulate_data_car_zone import BatchDataLoader, CZDataset,
 from datetime import datetime
 from accelerate import Accelerator
 from accelerate import DistributedDataParallelKwargs
-import torch_optimizer as t_optim
+# import torch_optimizer as t_optim
 
 torch.backends.cudnn.benchmark = True
 
@@ -35,7 +35,7 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
     accelerator = Accelerator(kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)])
     device = accelerator.device
     net_work = MDTCSML(stack_num=4, stack_size=4, in_channels=64, res_channels=128, kernel_size=7, causal=True).to(device)
-    car_zone_model_path = '/home/yanyongjie/code/official/car/car_zone_wuling_no_back_r4/model/model-302000--20.740382461547853.pickle'
+    car_zone_model_path = '/home/yanyongjie/code/official/car/jietu/model/student_model/model-572000--20.171258811950683.pickle'
     data_factory = GPUDataSimulate(TRAIN_FRQ_RESPONSE, ROAD_SNR_LIST, POINT_SNR_LIST, device=device, zone_model_path=car_zone_model_path).to(device)
     if is_need_dataloader:
         try:
@@ -48,14 +48,14 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
                         error_kws_dir=ERROR_KWS_DIR, sample_rate=16000, speech_seconds=10)
         batch_dataloader = BatchDataLoader(dataset, batch_size=BATCH_SIZE, workers_num=8)
         net_work, batch_dataloader, data_factory = accelerator.prepare(net_work, batch_dataloader, data_factory)
-    # optim = torch.optim.Adam(filter(lambda p: p.requires_grad, net_work.parameters()), lr=LR)
-    base_optim = t_optim.RAdam(filter(lambda p: p.requires_grad, net_work.parameters()), lr=LR, weight_decay=1e-6)
-    optim = t_optim.Lookahead(base_optim, k=5, alpha=0.5)
+    optim = torch.optim.Adam(filter(lambda p: p.requires_grad, net_work.parameters()), lr=LR)
+    # base_optim = t_optim.RAdam(filter(lambda p: p.requires_grad, net_work.parameters()), lr=LR, weight_decay=1e-6)
+    # optim = t_optim.Lookahead(base_optim, k=5, alpha=0.5)
     optim = accelerator.prepare(optim)
     step = 0
     if RESUME_MODEL:
         step, optim_dict = resume_model(net_work, MODEL_DIR, MODEL_NAME if model_name is None else model_name, device=device)
-        # optim.load_state_dict(optim_dict)
+        optim.load_state_dict(optim_dict)
     
     if is_need_dataloader:
         if rank == 0 and is_need_dataloader:
@@ -77,6 +77,7 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
             # s = torch.cat([s, s], dim=0)
             # label_idx = torch.cat([label_idx, label_idx], dim=0)   
             # wav, kw_target=None, ckw_target=None, real_frames=None, ckw_len=None, clean_speech=None, hidden=None, custom_in=  
+            
             logist, _,  train_hidden, loss, acc, acc2, vad_speech = \
                 net_work(enhance_data, kw_target=label_idx, ckw_target=custom_label, ckw_len=custom_label_len, real_frames=real_frames, label_frames=label_frames, clean_speech=s, hidden=train_hidden)
                 # net_work(mix=mix_in, anchor=anchor, tgt=s_in, spk_tgt=spk_tgt_tmp, spk_id=spk_id, is_spk=False, hidden=train_hidden)
@@ -132,8 +133,8 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
                         else:
                             ext = 0
                         sf.write('{}/{}_enhance_{}_{}.wav'.format(TRAINING_CHECK_PATH, i, target_np[i], ext), in_np[i], 16000)
-                        # sf.write('{}/{}_vad_{}.wav'.format(TRAINING_CHECK_PATH, i, target_np[i]), vad_speech_np[i], 16000)
-                
+                        sf.write('{}/{}_vad_{}_{}.wav'.format(TRAINING_CHECK_PATH, i, target_np[i], ext), vad_speech_np[i], 16000)
+            # step += 1
     return net_work
 
 if __name__ == '__main__':

@@ -36,7 +36,7 @@ if __name__ == '__main__':
             continue
         mix, f = sf.read(f_path)
         split_path = os.path.split(f_path)
-        cur_path = '/home/yanyongjie/code/official/kws/wuling/nhxl/process/test_error_kws'
+        cur_path = '/home/yanyongjie/code/official/kws/nihaoxiaojie/process/error'
         cur_file_name = split_path[1]
         if len(mix.shape) == 1:
             mix = np.reshape(mix, [-1, 1])
@@ -84,5 +84,5 @@ if __name__ == '__main__':
             est_kws_l.append(est_kws.reshape(-1)[:min_len])
         est = torch.stack(est_kws_l, dim= -1).detach().cpu().numpy()
         print(count_l)
-        #sf.write(f_path.replace('.wav', '{}.wav'.format(PROCESS_EXT)), est, f)
+        sf.write(f_path.replace('.wav', '{}.wav'.format(PROCESS_EXT)), est, f)
         print('{} has process!'.format(f_path))

@@ -323,6 +323,7 @@ class MDTCSML(nn.Module):
         res_channels: int,
         kernel_size: int,
         causal: bool,
+        shift=256
     ):
         super(MDTCSML, self).__init__()
         self.layer_norm = nn.LayerNorm([5, 2])
@@ -347,13 +348,14 @@ class MDTCSML(nn.Module):
         self.stack_num = stack_num
         self.stack_size = stack_size
         
-        self.fbank = Fbank(sample_rate=16000, filter_length=512, hop_length=256, n_mels=64)
+        self.fbank = Fbank(sample_rate=16000, filter_length=512, hop_length=shift, n_mels=64)
         self.time_vad = TimeVad(256)
         vocab_size = 410 # 拼音分类
         self.pinyin_fc = torch.nn.Linear(res_channels, vocab_size)
         self.class_out = torch.nn.Linear(res_channels +  vocab_size, 16)
         self.ctc = CTC()
         self.drop_out = nn.Dropout(p=0.1)
+        self.shift = shift
 
     def forward(self, wav, kw_target=None, ckw_target=None, real_frames=None, label_frames=None, ckw_len=None, clean_speech=None, hidden=None, custom_in=None):
         if hidden is None:
@@ -409,11 +411,11 @@ class MDTCSML(nn.Module):
             l2_loss = self.l2_regularization(l2_alpha=1)
             outputs_list.append(outputs_pre)
             l2_f_loss = self.l2_regularization_feature(outputs_list_for_loss)
-            kws_loss, acc, vad_speech = self.max_pooling_loss_vad(logist, kw_target, clean_speech, ckw_len, real_frames, label_frames)
+            kws_loss, acc, vad_speech = self.max_pooling_loss_vad_cal_end(logist, kw_target, clean_speech, ckw_len, real_frames, label_frames, ckw_target)
             loss = 0
-            for i in range(b):
-                if ckw_target[i, 0] >= 0:
-                    loss += 0.1 * self.ctc(pinyin_logist[i:i+1], real_frames[i:i+1], ckw_target[i:i+1], ckw_len[i:i+1])
+            # for i in range(b):
+            #     if ckw_target[i, 0] >= 0:
+            #         loss += 0.03 * self.ctc(pinyin_logist[i:i+1], real_frames[i:i+1], ckw_target[i:i+1], ckw_len[i:i+1])
             #ctc_loss = self.ctc(pinyin_logist, real_frames, ckw_target, ckw_len)
             loss += kws_loss + l2_f_loss + l2_loss #+ 0 * ctc_loss
             acc2 = 0
@@ -524,14 +526,36 @@ class MDTCSML(nn.Module):
     #     # Compute accuracy of current batch
     #     return loss, acc, clean_speech_vad
     
-    def max_pooling_loss_vad(self, logits_ori, target, clean_speech, ckw_len, real_frames, label_frames):
-        label_vad, _ = self.time_vad(clean_speech)
-        start_f = torch.argmax(label_vad, dim=1)
-        last_f = label_vad.shape[1] - torch.argmax(torch.flip(label_vad, dims=[1]), dim=1) - 1
+    def cal_end(self, in_wav, real_frame=None):
+        def frame(in_wav, shift):
+            b, t = in_wav.size()
+            padding_size = int(np.ceil(in_wav.shape[-1] / shift)) * shift - in_wav.shape[-1]
+            if padding_size > 0:
+                pad_wav = torch.cat([in_wav, torch.zeros([b, padding_size], device=in_wav.device)], dim=-1)
+            else:
+                pad_wav = torch.ones_like(in_wav) * in_wav
+            frame_wav = pad_wav.reshape([b, -1, shift])
+            return frame_wav
+        in_wav = in_wav.unsqueeze(dim=0)
+        frame_wav = frame(in_wav, self.shift)
+        pow = (frame_wav ** 2).sum(-1)
+        pow_db = 10 * torch.log10(pow + 1e-7)
+        BYPASS_FRAME_LEN = 5
+        pow_db_real = pow_db[:, :real_frame - BYPASS_FRAME_LEN]
+        threshold = pow_db_real[:, -10:].mean(dim=-1) + 20
+        flip_pow_db_real = torch.flip(pow_db_real, dims=[1])
+        flip_pow_db_real_bool = flip_pow_db_real > threshold
+        for i in range(real_frame - 10):
+            if flip_pow_db_real_bool[:, i:i + 10].sum().item() > 9:
+                break
+        end = real_frame - BYPASS_FRAME_LEN - i
+        return end
+    
+    def max_pooling_loss_vad_cal_end(self, logits_ori, target, clean_speech, ckw_len, real_frames, label_frames, ckw_target):
         logits_softmax = torch.softmax(logits_ori, dim=-1)
         num_utts = logits_ori.size(0)
         with torch.no_grad():
-            max_logits, index = logits_softmax[:, :, 1:5].max(1)
+            max_logits, index = logits_softmax[:, :, 1:2].max(1)
             num_correct = 0
             for i in range(num_utts):
                 max_p, idx = max_logits[i].max(0)
@@ -542,12 +566,103 @@ class MDTCSML(nn.Module):
             acc = num_correct / num_utts
         logits = torch.clamp(torch.log_softmax(logits_ori, dim=-1), min=-8)
         from settings.config import TRAINING_KEY_WORDS
-        acc_threshod = 1 / (len(TRAINING_KEY_WORDS) + 1) * 1.1
+        # acc_threshod = 1 / (len(TRAINING_KEY_WORDS) + 1) * 1.1
+        acc_threshod = 0.85
         clean_speech_vad = clean_speech.detach()
 
         loss = 0.0
-        non_keyword_weight = 4.0
-        keyword_weight = 1.0 #len(TRAINING_KEY_WORDS) + 1
+        non_keyword_weight = 1.0
+        keyword_weight = 4.0 #len(TRAINING_KEY_WORDS) + 1
+        for i in range(num_utts):
+            # 唤醒词
+            if target[i] == 0:
+                # 非唤醒词
+                # if acc > acc_threshod:
+                #     # 该惩罚项在早期启用会导致不收敛，输出全为background
+                #     prob = logits[i, :, 0]
+                #     min_prob = prob.sum()
+                #     # min_prob, _ = torch.min(prob, dim=0)
+                #     loss += (-min_prob) * non_keyword_weight
+                # 查看醒词类别
+                prob = logits[i, :, 1:2]
+                max_prob = torch.amax(prob)
+                loss += max_prob * non_keyword_weight
+            else:
+                # 唤醒词
+                prob = logits[i, :, target[i]]
+                label_frame = label_frames[i]
+                if label_frame > 1: # 非 oneshot
+                    start = label_frame - 2
+                    end = label_frame + 4
+                else:
+                    start = 10
+                    end = real_frames[i] - 10
+                    # if ckw_target[i, 0] < 0 or ckw_len[i] > 5 or ckw_len[i] < 3:
+                    #     start = 10
+                    #     end = real_frames[i] - 10
+                    # else:
+                    #     tmp = self.cal_end(clean_speech[i], real_frame=real_frames[i])
+                    #     if real_frames[i] - tmp < 15 or real_frames[i] - tmp > 40:
+                    #         start = 10
+                    #         end = real_frames[i] - 10
+                    #     else:
+                    #         start = tmp - 5
+                    #         end = tmp + 5
+                clean_speech_vad[i, :start * 16 * 16] = 0
+                clean_speech_vad[i, end * 16 * 16:] = 0
+                prob1 = prob[start: end]
+                max_prob, max_idx = torch.max(prob1, dim=0)
+                loss += -max_prob * keyword_weight
+                
+                if acc > acc_threshod:
+                    prob2 = prob[:start - 1]                    
+                    prob2 = torch.amax(prob2, dim=0)
+                    loss += prob2 * non_keyword_weight
+                    
+                    prob3 = prob[end + 1:]
+                    prob3 = torch.amax(prob3, dim=0)
+                    loss += prob3 * non_keyword_weight
+                    # max_prob, max_idx = torch.max(prob1, dim=0)
+                    # loss += -max_prob * keyword_weight
+                    
+                # other 
+                # if acc > acc_threshod:
+                # #     # 该惩罚项在早期启用会导致不收敛，输出全为background
+                #     prob_other = torch.cat([logits[i, :, target[i] + 1:5], logits[i, :, 1:target[i]]], dim=-1)
+                #     if prob_other.size(-1) > 0:
+                #         max_prob_other = torch.amax(prob_other)
+                #         loss += max_prob_other * keyword_weight
+
+        loss = loss / num_utts
+        # Compute accuracy of current batch
+        return loss, acc, clean_speech_vad
+
+    
+    def max_pooling_loss_vad(self, logits_ori, target, clean_speech, ckw_len, real_frames, label_frames, ckw_target):
+        label_vad, _ = self.time_vad(clean_speech, real_frames=real_frames)
+        start_f = torch.argmax(label_vad, dim=1)
+        last_f = label_vad.shape[1] - torch.argmax(torch.flip(label_vad, dims=[1]), dim=1) - 1
+        logits_softmax = torch.softmax(logits_ori, dim=-1)
+        num_utts = logits_ori.size(0)
+        with torch.no_grad():
+            max_logits, index = logits_softmax[:, :, 1:2].max(1)
+            num_correct = 0
+            for i in range(num_utts):
+                max_p, idx = max_logits[i].max(0)
+                if max_p > 0.5 and (idx + 1 == target[i]):
+                    num_correct += 1
+                if max_p < 0.5 and target[i] == 0:
+                    num_correct += 1
+            acc = num_correct / num_utts
+        logits = torch.clamp(torch.log_softmax(logits_ori, dim=-1), min=-8)
+        from settings.config import TRAINING_KEY_WORDS
+        # acc_threshod = 1 / (len(TRAINING_KEY_WORDS) + 1) * 1.1
+        acc_threshod = 0.85
+        clean_speech_vad = clean_speech.detach()
+
+        loss = 0.0
+        non_keyword_weight = 1.0
+        keyword_weight = 4.0 #len(TRAINING_KEY_WORDS) + 1
         for i in range(num_utts):
             # 唤醒词
             if target[i] == 0:
@@ -570,13 +685,21 @@ class MDTCSML(nn.Module):
                     start = label_frame - 1
                     end = label_frame + 2
                 else:
-                    if start_f[i] < 10 or last_f[i] > real_frames[i] - 10:
+                    if start_f[i] < 10 or last_f[i] > real_frames[i] - 10 or ckw_target[i, 0] < 0:
                         start = 10
                         end = real_frames[i]
                     else:
-                        if ckw_len[i] <= 5: # 非oneeshot
-                            start = (start_f[i] + last_f[i]) // 2 + 3
-                            end = min(last_f[i], real_frames[i])
+                        if ckw_len[i] <= 5 and ckw_len[i] >= 3: # 非oneeshot
+                            # start = (start_f[i] + last_f[i]) // 2 + 3
+                            # # start = (last_f[i] - start_f[i]) * (ckw_len[i] - 1) // ckw_len[i] + start_f[i] + 3
+                            # end = min(last_f[i], real_frames[i])
+                            if real_frames[i] - last_f[i] > 16 and real_frames[i] - last_f[i] < 40: # vad正常
+                                start = last_f[i] + 1
+                                end = real_frames[i] - 10
+                            else:
+                                start = 10
+                                end = real_frames[i] - 10
+                            
                             # if last_f[i] + 5 > real_frames[i] - 10: # vad 有问题了，降级
                             #     start = 10
                             #     end = real_frames[i] - 10
@@ -589,8 +712,8 @@ class MDTCSML(nn.Module):
                     if start >= end:
                         start = 10
                         end = real_frames[i]
-                    clean_speech_vad[i, :start] = 0
-                    clean_speech_vad[i, end:] = 0
+                clean_speech_vad[i, :start * 16 * 16] = 0
+                clean_speech_vad[i, end * 16 * 16:] = 0
                 prob1 = prob[start: end]
                 max_prob, max_idx = torch.max(prob1, dim=0)
                 loss += -max_prob * keyword_weight
@@ -598,21 +721,21 @@ class MDTCSML(nn.Module):
                 if acc > acc_threshod:
                     prob2 = prob[:start - 1]                    
                     prob2 = torch.amax(prob2, dim=0)
-                    loss += prob2 * keyword_weight
+                    loss += prob2 * non_keyword_weight
                     
                     prob3 = prob[end + 1:]
                     prob3 = torch.amax(prob3, dim=0)
-                    loss += prob3 * keyword_weight
+                    loss += prob3 * non_keyword_weight
                     # max_prob, max_idx = torch.max(prob1, dim=0)
                     # loss += -max_prob * keyword_weight
                     
                 # other 
-                if acc > acc_threshod:
-                #     # 该惩罚项在早期启用会导致不收敛，输出全为background
-                    prob_other = torch.cat([logits[i, :, target[i] + 1:5], logits[i, :, 1:target[i]]], dim=-1)
-                    if prob_other.size(-1) > 0:
-                        max_prob_other = torch.amax(prob_other)
-                        loss += max_prob_other * keyword_weight
+                # if acc > acc_threshod:
+                # #     # 该惩罚项在早期启用会导致不收敛，输出全为background
+                #     prob_other = torch.cat([logits[i, :, target[i] + 1:5], logits[i, :, 1:target[i]]], dim=-1)
+                #     if prob_other.size(-1) > 0:
+                #         max_prob_other = torch.amax(prob_other)
+                #         loss += max_prob_other * keyword_weight
 
         loss = loss / num_utts
         # Compute accuracy of current batch

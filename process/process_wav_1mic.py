@@ -4,13 +4,13 @@ import sys
 from train.train_script_1mic import *
 from tools.stft_istft import *
 
-MIX_WAV_FILE_PATH = './process/wuling'
+MIX_WAV_FILE_PATH = './process/xjnh'
 #MIX_WAV_FILE_PATH = './process/test_wav'
 #MIX_WAV_FILE_PATH = './process/background'
 #MIX_WAV_FILE_PATH = './process/sow_new'
-MIX_WAV_FILE_PATH = './process/sow'
+#MIX_WAV_FILE_PATH = './process/sow'
 #MIX_WAV_FILE_PATH = './process/0112'
-#MIX_WAV_FILE_PATH = './process/test_error_kws'
+# MIX_WAV_FILE_PATH = './oneshot'
 PROCESS_EXT = 'elevoc_process'
 THRES_HOLD = 0.5
 

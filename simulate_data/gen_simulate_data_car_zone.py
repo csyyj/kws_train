@@ -111,8 +111,12 @@ class CZDataset(Dataset):
                         p = p[0]
                     else:
                         scale = 1
-                    with open(p, 'rb') as f:
-                        key_tmp = pickle.load(f)
+                    ext = os.path.splitext(p)[-1]
+                    if ext == '.pickle':
+                        with open(p, 'rb') as f:
+                            key_tmp = pickle.load(f)
+                    else:
+                        key_tmp = gen_target_file_list(p)
                     tmp += key_tmp * scale
             else:
                 with open(info, 'rb') as f:
@@ -236,7 +240,7 @@ class CZDataset(Dataset):
                 else:
                     is_key = False
                 
-                if random.random() < 0.90:
+                if random.random() < 0.95 or len(self.error_kws_list) < 1:
                     s_tmp, key_idx, label, real_frames, label_frame = self._get_long_wav(is_key=is_key)
                 else:
                     s_tmp, key_idx, label, real_frames, label_frame = self._get_error_kws_wav()
@@ -337,7 +341,57 @@ class CZDataset(Dataset):
                 l.append(self._simulate_freq_response(wav[:, i]))
             return np.stack(l, axis=-1)
     
-    def gen_label_wav(self, info):
+    def gen_label_wav(self, path):
+        npy_path = path.replace('.wav', '.npy')
+        label_path = path.replace('.wav', '.txt')
+        if os.path.exists(npy_path):
+            try:
+                data = np.load(npy_path, mmap_mode='c')
+                label_idx = None
+            except:
+                data, fs = sf.read(path)
+                if fs != 16000:
+                    data = librosa.resample(data, orig_sr=fs, target_sr=16000)
+                if len(data.shape) == 2:
+                    label_idx = np.argmax(data[:, 1])
+                    data = data[:, 0]
+                else:
+                    label_idx = None
+                np.save(npy_path, data.astype(np.float16))
+        else:
+            try:
+                data, fs = sf.read(path)
+            except:
+                print(path)
+                return None, None, False, None
+            if fs != 16000:
+                data = librosa.resample(data, orig_sr=fs, target_sr=16000)
+            if len(data.shape) == 2:
+                    label_idx = np.argmax(data[:, 1])
+                    data = data[:, 0]
+            else:
+                label_idx = None
+            np.save(npy_path, data.astype(np.float16))
+        if os.path.exists(label_path):
+            with open(label_path, 'r') as f:
+                try:
+                    label_idx = int(f.read())
+                    label_frame = label_idx // (16 * 16)
+                except:
+                    print('{} read error'.format(label_idx))
+                    return None, None, False, None
+        else:
+            if label_idx is not None:
+                with open(label_path, 'w') as f:
+                    f.write('{}'.format(label_idx))
+                label_frame = label_idx // (16 * 16)
+            else:
+                label_frame = -1
+        label = np.array([-1], dtype=np.int64)
+        return data, label, True, label_frame
+        
+    
+    def gen_label_wav_by_list(self, info):
         path = os.path.join('/mnt/raid2/user_space/yanyongjie/asr', info[1])
         if not os.path.exists(path):
             print('wav not find: {}'.format(path))
@@ -384,6 +438,8 @@ class CZDataset(Dataset):
         return data, label, True, label_frame
 
     def pinyin2idx(self, pin_yin, info):
+        if pin_yin == 'undifine':
+            return np.array([-1], dtype=np.int64)
         slice_in = pin_yin.split(' ')
         l = []
         for p in slice_in:
@@ -406,7 +462,10 @@ class CZDataset(Dataset):
                 key_list = self.key_words_list[idx]
                 rdm_idx = random.randint(0, len(key_list) - 1)
                 bg_info = key_list[rdm_idx]
-                wav, label, success, label_frame = self.gen_label_wav(bg_info)
+                if type(bg_info) == list:
+                    wav, label, success, label_frame = self.gen_label_wav_by_list(bg_info)
+                else:
+                    wav, label, success, label_frame = self.gen_label_wav(bg_info)
                 if not success:
                     continue
                 wav = wav / (np.max(np.abs(wav)) + 1e-6)
@@ -420,7 +479,7 @@ class CZDataset(Dataset):
             while True:
                 idx = random.randint(0, len(self.bg_wav_list) - 1)
                 bg_info = self.bg_wav_list[idx]
-                wav, label, success, label_frame = self.gen_label_wav(bg_info)
+                wav, label, success, label_frame = self.gen_label_wav_by_list(bg_info)
                 if not success:
                     continue
                 wav = wav / (np.max(np.abs(wav)) + 1e-6)
@@ -524,8 +583,6 @@ class GPUDataSimulate(nn.Module):
                             enhance_l.append(enhance_data[i, 0])
                         elif rdm_rate < 0.8:
                             enhance_l.append(mix_no_inter[i, 0])
-                        elif rdm_rate < 0.85:
-                            enhance_l.append(mix[i, 0])
                         else:
                             enhance_l.append(s[i, 0])
                         s_l.append(s[i, 0])
@@ -540,8 +597,6 @@ class GPUDataSimulate(nn.Module):
                             enhance_l.append(enhance_data[i, 1])
                         elif rdm_rate < 0.8:
                             enhance_l.append(mix_no_inter[i, 1])
-                        elif rdm_rate < 0.85:
-                            enhance_l.append(mix[i, 1])
                         else:
                             enhance_l.append(s[i, 1])
                         s_l.append(s[i, 1])
@@ -556,8 +611,6 @@ class GPUDataSimulate(nn.Module):
                         enhance_l.append(enhance_data[i, 0])
                     elif rdm_rate < 0.8:
                         enhance_l.append(mix_no_inter[i, 0])
-                    elif rdm_rate < 0.85:
-                        enhance_l.append(mix[i, 0])
                     else:
                         enhance_l.append(s[i, 0])
                     s_l.append(s[i, 0])
@@ -572,8 +625,6 @@ class GPUDataSimulate(nn.Module):
                         enhance_l.append(enhance_data[i, 1])
                     elif rdm_rate < 0.8:
                         enhance_l.append(mix_no_inter[i, 1])
-                    elif rdm_rate < 0.85:
-                        enhance_l.append(mix[i, 1])
                     else:
                         enhance_l.append(s[i, 1])
                     s_l.append(s[i, 1])
@@ -702,7 +753,7 @@ class GPUDataSimulate(nn.Module):
 
             mix = s_rev + n[:, :s_rir.size(1)] * n_alpha + p_rev * p_n_alpha
             mix_no_inter = s_tgt[:, :s_rev.size(1)] + n[:, :s_rir.size(1)] * n_alpha + p_rev * p_n_alpha
-            mix_amp = torch.rand(s_rev.size(0), 1, 1, device=s_rev.device).clamp_(0.1, 1.0) 
+            mix_amp = torch.rand(s_rev.size(0), 1, 1, device=s_rev.device).uniform_(0.05, 1.0) 
             alpha = 1 / (torch.amax(torch.abs(mix), [-1, -2], keepdim=True) + EPSILON)
             alpha *= mix_amp
             mix_no_inter *= alpha
