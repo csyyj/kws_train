@@ -442,19 +442,35 @@ def get_long_wav(speaker_list, wav_len):
     sel_wav = spk_wav[rdm_start:rdm_start + wav_len]
     return sel_wav.astype(np.float32)
 
+def gen_target_file_list(target_dir, target_ext='.wav'):
+    l = []
+    for root, dirs, files in os.walk(target_dir, followlinks=True):
+        for f in files:
+            f = os.path.join(root, f)
+            ext = os.path.splitext(f)[1]
+            ext = ext.lower()
+            if ext == target_ext and '._' not in f:
+                l.append(f)
+    return l
+
 if __name__ == '__main__':
     THRES_HOLD = 0.5
     net_work = MDTCSML(stack_num=4, stack_size=4, in_channels=64, res_channels=128, kernel_size=7, causal=True)
     resume_model(net_work, './model/student_model/model-1125000--8.474374189376832.pickle')
     net_work.eval()
-    wav_l = gen_kw_pickle_list([['/mnt/raid2/user_space/yanyongjie/asr/pickle/小婕你好.pickle',
-                                '/mnt/raid2/user_space/yanyongjie/asr/pickle/你好小婕.pickle'
-                                ],])
+    # wav_l = gen_kw_pickle_list([[
+    #                             '/mnt/raid2/user_space/yanyongjie/asr/pickle/小婕你好导航回家.pickle',
+    #                             '/mnt/raid2/user_space/yanyongjie/asr/pickle/你好小婕导航回家.pickle',
+    #                             '/mnt/raid2/user_space/yanyongjie/asr/pickle/小婕你好.pickle',
+    #                             '/mnt/raid2/user_space/yanyongjie/asr/pickle/你好小婕.pickle',
+    #                             ],])
+    wav_l = gen_target_file_list('/mnt/raid2/user_space/yanyongjie/asr/实采语音/小捷你好/')
     speaker_list = gen_speaker_list('/home/yanyongjie/train_data/speaker_clean')
     import soundfile as sf
     with torch.no_grad():
-        for i, p in enumerate(wav_l[0]):
-            path = path = os.path.join('/mnt/raid2/user_space/yanyongjie/asr', p[1])
+        for i, p in enumerate(wav_l):
+            path = p
+            # path = os.path.join('/mnt/raid2/user_space/yanyongjie/asr', p[1])
             data, _ = sf.read(path)
             data_in = torch.from_numpy(data.astype(np.float32)).reshape(1, -1)
             est_logist = net_work(data_in)
@@ -465,21 +481,17 @@ if __name__ == '__main__':
                     break
                 else:
                     k += 1
-            if k > 20:
-                start = (k - random.randint(1, 3)) * 16 * 16
-                pad_wav = get_long_wav(speaker_list, data.shape[0] - start)
-                ori_max = np.max(np.abs(data))
-                if data.shape[0] > start + 100:
-                    pad_wav = pad_wav / (np.max(np.abs(pad_wav)) + 1e-4) * ori_max
-                splice_wav = np.concatenate([data[:start], pad_wav], axis=0)
-                mark = np.zeros_like(splice_wav)
+            if k > 20 and k < est_logist.size(0):
+                start = k * 16 * 16
+                mark = np.zeros_like(data)
                 try:
-                    mark[start + 16 * 16 * 5] = 1
+                    mark[start] = 1
                 except:
                     print(p)
-                cat_wav = np.stack([splice_wav, mark], axis=-1)
-                sf.write('./oneshot_simu2/{}.wav'.format(i), cat_wav, 16000)
+                    continue
+                cat_wav = np.stack([data, mark], axis=-1)
+                sf.write('./auto_mark_with_pretrained_model_oneshot/{}.wav'.format(i), cat_wav, 16000)
             else:
                 continue
-            if i > 100:
+            if i > 100000:
                 break

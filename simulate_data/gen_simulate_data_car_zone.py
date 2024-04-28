@@ -74,7 +74,7 @@ class CZDataset(Dataset):
         self.position_num = position_num
         self.pin_yin_config = self.parse_pin_yin_config(pin_yin_config_path)
         self.key_words_list = self.gen_kw_pickle_list(kws_wav_dir)
-        self.bg_wav_list = self.gen_pickle_list(bg_wav_dir)
+        self.bg_wav_list, self.vps_list = self.gen_pickle_list(bg_wav_dir)
         self.road_noise_path_list = gen_target_file_list(noise_path, target_ext='.npy')
         self.noise_data_info = self._list_noise_and_snr(p_noise_dir)
         self.rir_list = self._gen_rir_list(rir_dir)
@@ -94,11 +94,17 @@ class CZDataset(Dataset):
     
     def gen_pickle_list(self, pickle_pathes):
         keys = []
+        npys = []
         for path in pickle_pathes:
-            with open(path, 'rb') as f:
-                tmp = pickle.load(f)
-            keys += tmp
-        return keys
+            ext = os.path.splitext(path)[-1]
+            if ext == '.pickle':
+                with open(path, 'rb') as f:
+                    tmp = pickle.load(f)
+                    keys += tmp
+            else:
+                tmp = gen_target_file_list(path, target_ext='.npy')
+                npys += tmp
+        return keys, npys
     
     def gen_kw_pickle_list(self, pickle_pathes):
         keys = []
@@ -233,7 +239,7 @@ class CZDataset(Dataset):
             if i in position:
                 if not is_has_key:
                     # if random.random() < (1 / (len(self.key_words_list) + 1)):
-                    if random.random() < 0.90 or i > 1:
+                    if random.random() < 0.8 or i > 1:
                         is_key = False
                     else:
                         is_key = True
@@ -256,7 +262,7 @@ class CZDataset(Dataset):
                 label = np.array([-1], dtype=np.int64)
                 real_frames = self.wav_len // 256
                 label_len_l.append(0)
-                label_frame = -1
+                label_frame = np.array([-1, -1], dtype=np.int64)
             if max_label_len < label.shape[0]:
                 max_label_len = label.shape[0]
             if key_idx > 0:
@@ -282,7 +288,7 @@ class CZDataset(Dataset):
         label = np.stack(label_l_new, axis=1)
         label_len = np.array(label_len_l, dtype=np.int64)
         key_idx = np.array(key_idx_l, dtype=np.int64)
-        real_frames = np.array(real_frames_l)
+        real_frames = np.stack(real_frames_l, axis=0)
         label_frames = np.array(label_frame_l)
         
         num_p_noise = random.randint(1, max(2, self.position_num // 2 + 1))
@@ -343,7 +349,7 @@ class CZDataset(Dataset):
     
     def gen_label_wav(self, path):
         npy_path = path.replace('.wav', '.npy')
-        label_path = path.replace('.wav', '.txt')
+        label_path = path.replace('.wav', '_label.npy')
         if os.path.exists(npy_path):
             try:
                 data = np.load(npy_path, mmap_mode='c')
@@ -353,7 +359,9 @@ class CZDataset(Dataset):
                 if fs != 16000:
                     data = librosa.resample(data, orig_sr=fs, target_sr=16000)
                 if len(data.shape) == 2:
-                    label_idx = np.argmax(data[:, 1])
+                    label_start = np.argmin(data[:, 1])
+                    label_end = np.argmax(data[:, 1])
+                    label_idx = np.array([label_start, label_end], dtype=np.int64)
                     data = data[:, 0]
                 else:
                     label_idx = None
@@ -367,27 +375,37 @@ class CZDataset(Dataset):
             if fs != 16000:
                 data = librosa.resample(data, orig_sr=fs, target_sr=16000)
             if len(data.shape) == 2:
-                    label_idx = np.argmax(data[:, 1])
+                    label_start = np.argmin(data[:, 1])
+                    label_end = np.argmax(data[:, 1])
+                    label_idx = np.array([label_start, label_end], dtype=np.int64)
                     data = data[:, 0]
             else:
                 label_idx = None
             np.save(npy_path, data.astype(np.float16))
         if os.path.exists(label_path):
-            with open(label_path, 'r') as f:
-                try:
-                    label_idx = int(f.read())
-                    label_frame = label_idx // (16 * 16)
-                except:
-                    print('{} read error'.format(label_idx))
-                    return None, None, False, None
+            try:
+                label_frame = np.load(label_path) // (16 * 16)
+            except:
+                print('{} read error'.format(label_idx))
+                return None, None, False, None
         else:
             if label_idx is not None:
-                with open(label_path, 'w') as f:
-                    f.write('{}'.format(label_idx))
                 label_frame = label_idx // (16 * 16)
+                np.save(label_path, label_idx)
             else:
                 label_frame = -1
         label = np.array([-1], dtype=np.int64)
+        return data, label, True, label_frame
+    
+    def gen_vsp_wav(self):
+        path = self.vps_list[random.randint(0, len(self.vps_list) - 1)]
+        data = np.load(path, mmap_mode='c')
+        wav_len, _  = data.shape
+        data_len = random.randint(16000 * 2, 16000 * 4)
+        start = random.randint(0, wav_len - data_len + 1)
+        data = data[start: start + wav_len, random.randint(0, 1)]
+        label = np.array([-1], dtype=np.int64)
+        label_frame = np.array([-1, -1], dtype=np.int64)
         return data, label, True, label_frame
         
     
@@ -397,7 +415,6 @@ class CZDataset(Dataset):
             print('wav not find: {}'.format(path))
             return None, None, False, None
         npy_path = path.replace('.wav', '.npy')
-        label_path = path.replace('.wav', '.txt')
         if os.path.exists(npy_path):
             try:
                 data = np.load(npy_path, mmap_mode='c')
@@ -415,25 +432,17 @@ class CZDataset(Dataset):
             if fs != 16000:
                 data = librosa.resample(data, orig_sr=fs, target_sr=16000)
             np.save(npy_path, data.astype(np.float16))
-        if os.path.exists(label_path):
-            with open(label_path, 'r') as f:
-                try:
-                    label_sample = int(f.read())
-                    label_frame = label_sample // (16 * 16)
-                except:
-                    print('{} read error'.format(label_sample))
-                    return None, None, False, None
-        else:
-            label_frame = -1
-            if random.random() < 0.3:
-                # 变速
-                t = data.shape
-                sox_rate = random.uniform(0.9, 1.1)
-                s_tmp_tensor = torch.from_numpy(data.astype(np.float32)).reshape(1, -1)
-                data, _ = torchaudio.sox_effects.apply_effects_tensor(
-                    s_tmp_tensor, 16000, [['speed', str(sox_rate)], ['rate', str(16000)]]
-                    )
-                data = data.squeeze().cpu().numpy()
+        
+        label_frame = np.array([-1, -1], dtype=np.int64)
+        if random.random() < 0.3:
+            # 变速
+            t = data.shape
+            sox_rate = random.uniform(0.9, 1.1)
+            s_tmp_tensor = torch.from_numpy(data.astype(np.float32)).reshape(1, -1)
+            data, _ = torchaudio.sox_effects.apply_effects_tensor(
+                s_tmp_tensor, 16000, [['speed', str(sox_rate)], ['rate', str(16000)]]
+                )
+            data = data.squeeze().cpu().numpy()
         label = self.pinyin2idx(info[2], info)
         return data, label, True, label_frame
 
@@ -477,9 +486,12 @@ class CZDataset(Dataset):
         else:
             # background
             while True:
-                idx = random.randint(0, len(self.bg_wav_list) - 1)
-                bg_info = self.bg_wav_list[idx]
-                wav, label, success, label_frame = self.gen_label_wav_by_list(bg_info)
+                if random.random() < 0.6:
+                    idx = random.randint(0, len(self.bg_wav_list) - 1)
+                    bg_info = self.bg_wav_list[idx]
+                    wav, label, success, label_frame = self.gen_label_wav_by_list(bg_info)
+                else:
+                    wav, label, success, label_frame = self.gen_vsp_wav()
                 if not success:
                     continue
                 wav = wav / (np.max(np.abs(wav)) + 1e-6)
@@ -502,7 +514,7 @@ class CZDataset(Dataset):
         label = np.array([-1], np.int64)
         real_frames = wav.shape[0] // 256
         wav = np.concatenate([wav, np.zeros([self.wav_len - wav.shape[0]], dtype=np.float64)], axis=-1)
-        label_frame = -1
+        label_frame = np.array([-1, -1], dtype=np.int64)
         return wav.astype(np.float32), idx, label, real_frames, label_frame
         
         

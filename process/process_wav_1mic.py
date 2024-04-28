@@ -69,12 +69,16 @@ if __name__ == '__main__':
                 est_kws = torch.zeros_like(mix_c)
                 count = 0
                 k = 0
+                tmp = -10
                 while k < est_logist.size(0):
                     if est_logist[k] > THRES_HOLD:# and est_pinyin_logist[k - 10:k+10, 179].amax() > 0.3:
-                        est_kws[:, k * 256] = 0.1 * (max_idx[k] + 1)
-                        k += 40
-                        count += 1
+                        tmp = k
+                        k += 1
                     else:
+                        if tmp + 1 == k:
+                            est_kws[:, k * 256] = 0.1 * (max_idx[k] + 1)
+                            count += 1
+                            k += 40
                         k += 1
                 count_l.append(count)
             min_len = min(est_kws.shape[1], mix_c.reshape(-1).shape[0])

@@ -4,8 +4,8 @@ import sys
 from train.train_script_1mic import *
 from tools.stft_istft import *
 
-MIX_WAV_FILE_PATH = './process/wuling'
-MIX_WAV_FILE_PATH = '/home/yanyongjie/code/official/kws/wuling/nhxl/process/error_kws'
+MIX_WAV_FILE_PATH = '/home/yanyongjie/code/official/kws/wuling/nhxl/process/error_kws_guodegang_14h/'
+# MIX_WAV_FILE_PATH = './process/error_kws_0426'
 PROCESS_EXT = 'elevoc_process'
 THRES_HOLD = 0.5
 

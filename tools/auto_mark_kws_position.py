@@ -40,8 +40,8 @@ def cal_end(in_wav, shift=256):
         return end
     
 if __name__ == '__main__':
-    ORI_DIR = '/mnt/raid2/user_space/yanyongjie/asr/kws_words/小婕你好/'
-    DEST_DIR = './小婕你好'
+    ORI_DIR = '/mnt/raid2/user_space/yanyongjie/asr/实采语音/小捷你好/'
+    DEST_DIR = './oneshot'
     wav_list = gen_target_file_list(ORI_DIR)
     for i, path in enumerate(wav_list):
         data, fs = sf.read(path)
@@ -52,5 +52,5 @@ if __name__ == '__main__':
         file_name = os.path.split(path)[-1]
         dest_path = os.path.join(DEST_DIR, file_name)
         sf.write(dest_path, data, fs)
-        if i > 200:
+        if i > 1000:
             break

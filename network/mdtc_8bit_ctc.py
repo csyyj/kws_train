@@ -413,9 +413,9 @@ class MDTCSML(nn.Module):
             l2_f_loss = self.l2_regularization_feature(outputs_list_for_loss)
             kws_loss, acc, vad_speech = self.max_pooling_loss_vad_cal_end(logist, kw_target, clean_speech, ckw_len, real_frames, label_frames, ckw_target)
             loss = 0
-            # for i in range(b):
-            #     if ckw_target[i, 0] >= 0:
-            #         loss += 0.03 * self.ctc(pinyin_logist[i:i+1], real_frames[i:i+1], ckw_target[i:i+1], ckw_len[i:i+1])
+            for i in range(b):
+                if ckw_target[i, 0] >= 0:
+                    loss += 0.01 * self.ctc(pinyin_logist[i:i+1], real_frames[i:i+1], ckw_target[i:i+1], ckw_len[i:i+1])
             #ctc_loss = self.ctc(pinyin_logist, real_frames, ckw_target, ckw_len)
             loss += kws_loss + l2_f_loss + l2_loss #+ 0 * ctc_loss
             acc2 = 0
@@ -571,8 +571,8 @@ class MDTCSML(nn.Module):
         clean_speech_vad = clean_speech.detach()
 
         loss = 0.0
-        non_keyword_weight = 1.0
-        keyword_weight = 4.0 #len(TRAINING_KEY_WORDS) + 1
+        non_keyword_weight = 4.0
+        keyword_weight = 1.0 #len(TRAINING_KEY_WORDS) + 1
         for i in range(num_utts):
             # 唤醒词
             if target[i] == 0:
@@ -591,12 +591,18 @@ class MDTCSML(nn.Module):
                 # 唤醒词
                 prob = logits[i, :, target[i]]
                 label_frame = label_frames[i]
-                if label_frame > 1: # 非 oneshot
-                    start = label_frame - 2
-                    end = label_frame + 4
+                if label_frame[0] > 1 and label_frame[1] > 1: # 标注过的
+                    start = label_frame[0]
+                    end = label_frame[1]
+                    prob1 = prob[start: end]
+                    sum_prob = torch.sum(prob1, dim=0)
+                    loss += -sum_prob * keyword_weight
                 else:
                     start = 10
                     end = real_frames[i] - 10
+                    prob1 = prob[start: end]
+                    max_prob, max_idx = torch.max(prob1, dim=0)
+                    loss += -max_prob * keyword_weight
                     # if ckw_target[i, 0] < 0 or ckw_len[i] > 5 or ckw_len[i] < 3:
                     #     start = 10
                     #     end = real_frames[i] - 10
@@ -610,16 +616,13 @@ class MDTCSML(nn.Module):
                     #         end = tmp + 5
                 clean_speech_vad[i, :start * 16 * 16] = 0
                 clean_speech_vad[i, end * 16 * 16:] = 0
-                prob1 = prob[start: end]
-                max_prob, max_idx = torch.max(prob1, dim=0)
-                loss += -max_prob * keyword_weight
                 
                 if acc > acc_threshod:
-                    prob2 = prob[:start - 1]                    
+                    prob2 = prob[:start - 5]                    
                     prob2 = torch.amax(prob2, dim=0)
                     loss += prob2 * non_keyword_weight
                     
-                    prob3 = prob[end + 1:]
+                    prob3 = prob[end + 5:]
                     prob3 = torch.amax(prob3, dim=0)
                     loss += prob3 * non_keyword_weight
                     # max_prob, max_idx = torch.max(prob1, dim=0)
