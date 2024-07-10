@@ -35,7 +35,7 @@ def gen_data_and_network(is_need_dataloader=True, model_name=None):
     accelerator = Accelerator(kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)])
     device = accelerator.device
     net_work = MDTCSML(stack_num=4, stack_size=4, in_channels=64, res_channels=128, kernel_size=7, causal=True).to(device)
-    car_zone_model_path = '/home/yanyongjie/code/official/car/jietu/model/student_model/model-572000--20.171258811950683.pickle'
+    car_zone_model_path = '/home/yanyongjie/code/official/car/lanjing_6/model/student_model/model-449000--17.79382451057434.pickle'
     data_factory = GPUDataSimulate(TRAIN_FRQ_RESPONSE, ROAD_SNR_LIST, POINT_SNR_LIST, device=device, zone_model_path=car_zone_model_path).to(device)
     if is_need_dataloader:
         try:

@@ -1,13 +1,13 @@
 import os
 import torch
 
-os.environ["CUDA_VISIBLE_DEVICES"] = '2'#"0,1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1, 2"
 
 TRAIN_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 PIN_YIN_CONFIG_PATH = './pin_yin_config.txt'
 
-ERROR_KWS_DIR = '/home/yanyongjie/code/official/kws/nihaoxiaojie/process/error'
+ERROR_KWS_DIR = '/home/yanyongjie/code/official/kws/xiaojingtongxue_6.0/process/error'
 
 
 TRAINING_BACKGROUND = [
@@ -115,34 +115,18 @@ TRAINING_BACKGROUND = [
                      '/mnt/raid2/user_space/yanyongjie/asr/pickle/你好小五.pickle',
                      '/mnt/raid2/user_space/yanyongjie/asr/pickle/小五小五.pickle',
                      '/mnt/raid2/user_space/yanyongjie/asr/pickle/小菱小菱.pickle',
-                     '/mnt/raid2/user_space/yanyongjie/asr/pickle/小鲸同学.pickle',
-                     './vsp_result',
+                     '/mnt/raid2/user_space/yanyongjie/asr/pickle/你好小婕.pickle',
+                     '/mnt/raid2/user_space/yanyongjie/asr/pickle/小婕你好.pickle',
+                     '../nihaoxiaojie/vsp_result',
        ]
 
 
 TRAINING_KEY_WORDS = [
                             [
-                            '/mnt/raid2/user_space/yanyongjie/asr/pickle/小婕你好.pickle',
-                            # '/mnt/raid2/user_space/yanyongjie/asr/pickle/小婕你好导航回家.pickle',
-                            '/mnt/raid2/user_space/yanyongjie/asr/pickle/你好小婕.pickle',
-                            # '/mnt/raid2/user_space/yanyongjie/asr/pickle/你好小婕导航回家.pickle',
-                            # '/mnt/raid2/user_space/yanyongjie/asr/kws_words/你好小婕导航回家/',
-                            # '/mnt/raid2/user_space/yanyongjie/asr/kws_words/小婕你好导航回家/',
-                            # '/mnt/raid2/user_space/yanyongjie/asr/kws_words/sep/xiaojie_sep/小婕你好导航回家',
-                            # '/mnt/raid2/user_space/yanyongjie/asr/kws_words/sep/xiaojie_sep/你好小婕导航回家',
-                            
-                            # ('/mnt/raid2/user_space/yanyongjie/asr/实采语音/你好小捷/', 100),
-                            # ('/mnt/raid2/user_space/yanyongjie/asr/实采语音/小捷你好/', 100),
-                            # './oneshot_simu',
-                            './auto_mark_with_pretrained_model_remark',
-                            ('./auto_mark_with_pretrained_model_oneshot_remark', 100),
-                            # ('auto_mark_with_pretrained_model_fanlu', 100)
-                            # ('./你好小婕', 20), 
-                            # ('./小婕你好', 20),
-                            # ('./小婕oneshot', 100),
-                            # ('/mnt/raid2/user_space/yanyongjie/asr/kws_words/sep/oneshot', 100),
-                            # ('./oneshot', 1),
-                            # ('/mnt/raid2/user_space/yanyongjie/asr/kws_words/enhance_data/nhxj_xjnh/aec_2024_04_16.pickle', 10)
+                            '/mnt/raid2/user_space/yanyongjie/asr/pickle/小鲸同学.pickle',
+                            '/mnt/raid2/user_space/yanyongjie/asr/pickle/小鲸同学导航回家.pickle',
+                            ('./auto_mark_with_pretrained_model_v2', 100)
+                            # ('./auto_mark_with_pretrained_model_oneshot_remark', 100),
                             ]
                      ]
 
@@ -166,10 +150,10 @@ LR = 1e-6
 RESUME_MODEL = True 
 
 MODEL_DIR = './model/student_model'
-MODEL_NAME = ''#'model-535000-3.8693900108337402'#'model-1078000--8.341829524040222'#'model-1087000--8.435127902030946'#'model-1078000--8.341829524040222'#'model-535000-3.8693900108337402'#'model-532500-3.020547785758972'#'model-532000--0.31978827953338623'#'model-2216500-1008.9862243652344'#'model-2143000-24.285032691955568'#'model-1622500--15.416103134155273'#'model-1611000--0.9585929775238037'#'model-754000--8.155949764251709'#'model-316500-71.05690199851989'#'model-614000--12.00822624206543'#'model-238500-0.08611498154699802'#'model-247500--34.434267597198485'#'model-325500--12.769076719284058'#'model-319500--16.160415515899658'#'model-319500--16.160415515899658'  # 'model-26400--15.593444061279296'  # 'model-364145-0.03338756449520588'  # 'model-307000-0.1684750882536173'
+MODEL_NAME = 'model-1114000--15.79974058151245'#'model-535000-3.8693900108337402'#'model-1078000--8.341829524040222'#'model-1087000--8.435127902030946'#'model-1078000--8.341829524040222'#'model-535000-3.8693900108337402'#'model-532500-3.020547785758972'#'model-532000--0.31978827953338623'#'model-2216500-1008.9862243652344'#'model-2143000-24.285032691955568'#'model-1622500--15.416103134155273'#'model-1611000--0.9585929775238037'#'model-754000--8.155949764251709'#'model-316500-71.05690199851989'#'model-614000--12.00822624206543'#'model-238500-0.08611498154699802'#'model-247500--34.434267597198485'#'model-325500--12.769076719284058'#'model-319500--16.160415515899658'#'model-319500--16.160415515899658'  # 'model-26400--15.593444061279296'  # 'model-364145-0.03338756449520588'  # 'model-307000-0.1684750882536173'
 
 PRINT_TIMES = 100
 
-TEST_TIMES = 500
+TEST_TIMES = 1000
 
 TRAIN_FRQ_RESPONSE = '/home/yanyongjie/train_data/fir/fir_1000000.npy'

@@ -618,7 +618,7 @@ class MDTCSML(nn.Module):
                 clean_speech_vad[i, end * 16 * 16:] = 0
                 
                 if acc > acc_threshod:
-                    prob2 = prob[:start - 5]                    
+                    prob2 = prob[:start - 2]                    
                     prob2 = torch.amax(prob2, dim=0)
                     loss += prob2 * non_keyword_weight
                     

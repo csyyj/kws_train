@@ -456,7 +456,7 @@ def gen_target_file_list(target_dir, target_ext='.wav'):
 if __name__ == '__main__':
     THRES_HOLD = 0.5
     net_work = MDTCSML(stack_num=4, stack_size=4, in_channels=64, res_channels=128, kernel_size=7, causal=True)
-    resume_model(net_work, './model/student_model/model-1125000--8.474374189376832.pickle')
+    resume_model(net_work, './model/student_model/model-550000--18.507131328582762.pickle')
     net_work.eval()
     # wav_l = gen_kw_pickle_list([[
     #                             '/mnt/raid2/user_space/yanyongjie/asr/pickle/小婕你好导航回家.pickle',
@@ -464,8 +464,7 @@ if __name__ == '__main__':
     #                             '/mnt/raid2/user_space/yanyongjie/asr/pickle/小婕你好.pickle',
     #                             '/mnt/raid2/user_space/yanyongjie/asr/pickle/你好小婕.pickle',
     #                             ],])
-    wav_l = gen_target_file_list('/mnt/raid2/user_space/yanyongjie/asr/实采语音/小捷你好/')
-    speaker_list = gen_speaker_list('/home/yanyongjie/train_data/speaker_clean')
+    wav_l = gen_target_file_list('/mnt/raid2/user_space/yanyongjie/asr/kws_words/小鲸同学')
     import soundfile as sf
     with torch.no_grad():
         for i, p in enumerate(wav_l):
@@ -476,22 +475,30 @@ if __name__ == '__main__':
             est_logist = net_work(data_in)
             est_logist = est_logist.squeeze()[:, 1:2].sum(-1)
             k = 0
+            start = 0
+            end = 0
             while k < est_logist.size(0):
                 if est_logist[k] > THRES_HOLD:
-                    break
+                    if start == 0:
+                        start = k
                 else:
-                    k += 1
+                    if start > 0:
+                        end = k
+                        break
+                k += 1
             if k > 20 and k < est_logist.size(0):
-                start = k * 16 * 16
+                start = start * 16 * 16
+                end = end * 16 * 16
                 mark = np.zeros_like(data)
                 try:
-                    mark[start] = 1
+                    mark[start] = -1
+                    mark[end] = 1
                 except:
                     print(p)
                     continue
                 cat_wav = np.stack([data, mark], axis=-1)
-                sf.write('./auto_mark_with_pretrained_model_oneshot/{}.wav'.format(i), cat_wav, 16000)
+                sf.write('./auto_mark_with_pretrained_model_v2/{}.wav'.format(i), cat_wav, 16000)
             else:
                 continue
-            if i > 100000:
+            if i > 200:
                 break

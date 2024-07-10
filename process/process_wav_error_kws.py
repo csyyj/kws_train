@@ -5,6 +5,7 @@ from train.train_script_1mic import *
 from tools.stft_istft import *
 
 MIX_WAV_FILE_PATH = '/home/yanyongjie/code/official/kws/wuling/nhxl/process/error_kws_guodegang_14h/'
+MIX_WAV_FILE_PATH = '/home/yanyongjie/code/official/kws/nihaoxiaojie/process/error_kws_0426'
 # MIX_WAV_FILE_PATH = './process/error_kws_0426'
 PROCESS_EXT = 'elevoc_process'
 THRES_HOLD = 0.5
@@ -36,7 +37,7 @@ if __name__ == '__main__':
             continue
         mix, f = sf.read(f_path)
         split_path = os.path.split(f_path)
-        cur_path = '/home/yanyongjie/code/official/kws/nihaoxiaojie/process/error'
+        cur_path = '/home/yanyongjie/code/official/kws/xiaojingtongxue_6.0/process/error'
         cur_file_name = split_path[1]
         if len(mix.shape) == 1:
             mix = np.reshape(mix, [-1, 1])
@@ -74,7 +75,7 @@ if __name__ == '__main__':
                         print(est_logist[k:k+10])
                         error_kws_wav = mix_c[:, max((k - 560) * 256, 0):min((k + 25)* 256, mix_c.size(1))].squeeze().detach().cpu().numpy()
                         save_path = os.path.join(cur_path, '{}_{}_{}_{}.wav'.format(cur_file_name.replace('.wav', ''), c, count, k))
-                        sf.write(save_path, error_kws_wav, 16000)
+                        #sf.write(save_path, error_kws_wav, 16000)
                         k += 20
                     else:
                         k += 1
@@ -84,5 +85,5 @@ if __name__ == '__main__':
             est_kws_l.append(est_kws.reshape(-1)[:min_len])
         est = torch.stack(est_kws_l, dim= -1).detach().cpu().numpy()
         print(count_l)
-        sf.write(f_path.replace('.wav', '{}.wav'.format(PROCESS_EXT)), est, f)
+        #sf.write(f_path.replace('.wav', '{}.wav'.format(PROCESS_EXT)), est, f)
         print('{} has process!'.format(f_path))

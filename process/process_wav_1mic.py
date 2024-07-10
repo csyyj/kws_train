@@ -4,7 +4,7 @@ import sys
 from train.train_script_1mic import *
 from tools.stft_istft import *
 
-MIX_WAV_FILE_PATH = './process/xjnh'
+MIX_WAV_FILE_PATH = './process/test'
 #MIX_WAV_FILE_PATH = './process/test_wav'
 #MIX_WAV_FILE_PATH = './process/background'
 #MIX_WAV_FILE_PATH = './process/sow_new'
